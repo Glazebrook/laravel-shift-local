@@ -218,6 +218,15 @@ export class BaseAgent {
           `API returned malformed response: content is ${typeof response.content}, expected array`, this.name);
       }
 
+      // AUDIT-2 FIX: Detect max_tokens truncation. When Claude hits the token limit,
+      // stop_reason is 'max_tokens' and the content may be truncated JSON.
+      // Log a clear warning so the user knows what happened.
+      if (response.stop_reason === 'max_tokens') {
+        await this.logger.warn(this.name,
+          `Response truncated at max_tokens (${this.maxTokens}). ` +
+          `The model ran out of output space. If this persists, increase maxTokens for this agent.`);
+      }
+
       // Add assistant response to history
       messages.push({ role: 'assistant', content: response.content });
 
@@ -358,14 +367,17 @@ export class BaseAgent {
         }
         const isTimeout = err.name === 'AbortError' || err.code === 'ABORT_ERR';
         // P1-001 FIX: Also retry on HTTP 408 (Request Timeout) from Anthropic API
-        const isRetryable = isTimeout || err.status === 408 || err.status === 429 || err.status >= 500 || err.code === 'ECONNRESET';
+        // AUDIT-2 FIX: Retry on network errors without HTTP status (ECONNREFUSED, ETIMEDOUT, etc.)
+        const RETRYABLE_NETWORK_CODES = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EPIPE', 'EHOSTUNREACH', 'EAI_AGAIN'];
+        const isNetworkError = RETRYABLE_NETWORK_CODES.includes(err.code) || RETRYABLE_NETWORK_CODES.includes(err.cause?.code);
+        const isRetryable = isTimeout || isNetworkError || err.status === 408 || err.status === 429 || (err.status && err.status >= 500);
         if (!isRetryable || attempt === this.maxRetries) throw err;
 
         // M9 FIX: Add jitter (±25%) to prevent all agents retrying simultaneously
         const baseDelay = Math.min(2000 * Math.pow(2, attempt - 1), 60000);
         const jitter = baseDelay * 0.25 * (Math.random() * 2 - 1);
         const delay = Math.round(baseDelay + jitter);
-        const reason = isTimeout ? 'timeout' : err.status;
+        const reason = isTimeout ? 'timeout' : (err.status || err.code || 'network');
         await this.logger.warn(this.name, `API error (${reason}), retrying in ${delay}ms... (attempt ${attempt}/${this.maxRetries})`);
         await sleep(delay);
       }

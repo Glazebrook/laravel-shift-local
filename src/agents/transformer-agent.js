@@ -128,6 +128,18 @@ export class TransformerAgent extends BaseAgent {
         continue;
       }
 
+      // AUDIT-2 FIX: If this file was previously interrupted mid-transform (status was
+      // 'in_progress' from a prior run), restore from backup to ensure we transform
+      // from the pristine original, not a partially-modified version.
+      if (currentStatus === 'in_progress' && this.fileTools.hasBackup(filepath)) {
+        try {
+          this.fileTools.restore(filepath);
+          await this.logger.info(this.name, `Restored ${filepath} from backup before retry`);
+        } catch (restoreErr) {
+          await this.logger.warn(this.name, `Could not restore ${filepath} from backup: ${restoreErr.message}`);
+        }
+      }
+
       this.stateManager.setFileStatus(filepath, 'in_progress');
 
       try {

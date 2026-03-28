@@ -250,6 +250,9 @@ function validateConfig(config) {
     if (typeof config.git.branchPrefix === 'string') {
       // H4 FIX: Sanitise branchPrefix — strip path traversal chars
       config.git.branchPrefix = config.git.branchPrefix.replace(/[^a-zA-Z0-9/_-]/g, '');
+      // AUDIT-2 FIX: Also strip leading slashes and collapse consecutive slashes,
+      // which produce invalid git branch names (e.g. '../../etc/evil' → '//etc/evil').
+      config.git.branchPrefix = config.git.branchPrefix.replace(/^\/+/, '').replace(/\/{2,}/g, '/');
       if (!config.git.branchPrefix || config.git.branchPrefix.includes('..')) {
         config.git.branchPrefix = 'shift/upgrade';
       }
@@ -535,8 +538,14 @@ async function resumeUpgrade(opts) {
 
   // AUDIT FIX: Verify loaded state's projectPath matches the current path.
   // Prevents resuming against the wrong project if .shift/ was copied elsewhere.
+  // AUDIT-2 FIX: Case-insensitive comparison on Windows/macOS (NTFS/APFS are case-insensitive).
   const loadedProjectPath = stateManager.get('projectPath');
-  if (loadedProjectPath && resolve(loadedProjectPath) !== projectPath) {
+  const isCaseInsensitiveFS = process.platform === 'win32' || process.platform === 'darwin';
+  const resolvedLoaded = resolve(loadedProjectPath || '');
+  const pathsMatch = isCaseInsensitiveFS
+    ? resolvedLoaded.toLowerCase() === projectPath.toLowerCase()
+    : resolvedLoaded === projectPath;
+  if (loadedProjectPath && !pathsMatch) {
     throw new ShiftCliError('SHIFT_ERR_PATH_MISMATCH',
       `State was created for '${loadedProjectPath}' but you are resuming from '${projectPath}'. ` +
       `Run 'shift reset' and start a new upgrade, or use --path to specify the correct project.`);

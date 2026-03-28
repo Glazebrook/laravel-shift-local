@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(wc -l /c/Projects/laravel-shift-local/test/*.test.js)",
-      "Bash(node --test test/core.test.js test/extended.test.js test/integration.test.js test/orchestrator.test.js test/base-agent.test.js test/git-manager.test.js test/cli.test.js)"
+      "Bash(node --test test/core.test.js test/extended.test.js test/integration.test.js test/orchestrator.test.js test/base-agent.test.js test/git-manager.test.js test/cli.test.js)",
+      "Bash(npm test:*)",
+      "Bash(find test:*)"
     ]
   }
 }
