@@ -97,6 +97,20 @@ For each 👁️ Observation, restate:
 - Why it was classified as observation
 - Any conditions under which it should be revisited
 
+### Prior Audit Comparison (if applicable)
+
+If this is not the first audit run, include:
+
+| Prior Finding | Prior Status | Current Status | Notes |
+|---|---|---|---|
+| P0-001: State save race | Fixed | Still fixed ✅ | Verified in state-manager.js |
+| SEC-002: Glob traversal | Fixed | Still fixed ✅ | Containment check present |
+| ... | ... | ... | ... |
+
+**New findings not in prior audit**: [N]
+**Prior fixes that regressed**: [N]
+**Prior observations now fixed**: [N]
+
 ### Architecture Recommendations (Future — Out of Scope)
 
 List systemic improvements identified during the audit that require deeper structural

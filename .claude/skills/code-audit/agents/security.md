@@ -37,7 +37,58 @@ Before reviewing individual files, build a threat model based on Agent 1's archi
 - Filesystem → application (trusted for reads, verify for writes)
 - Network → application (untrusted)
 
-### Step 2: File-by-File Security Review
+### Step 2: Critical Call-Site Enumeration (Before Per-File Review)
+
+Before reviewing individual files, enumerate EVERY instance of these security-critical
+patterns across the entire codebase. This is a grep/search pass, not a file-by-file
+review. The goal is to build a complete inventory so nothing is missed during
+per-file analysis.
+
+**Mandatory searches:**
+
+```bash
+# Shell execution — find EVERY spawn/exec call
+grep -rn "exec\|spawn\|execa\|shell:" src/ bin/ --include="*.js"
+
+# JSON parsing — find EVERY JSON.parse call
+grep -rn "JSON\.parse" src/ bin/ --include="*.js"
+
+# File system writes — find EVERY write operation
+grep -rn "writeFile\|appendFile\|createWriteStream" src/ bin/ --include="*.js"
+
+# Path construction — find EVERY path.join/resolve AND string concatenation
+grep -rn "path\.join\|path\.resolve\|__dirname\|__filename" src/ bin/ --include="*.js"
+
+# Dynamic requires/imports
+grep -rn "require(\|import(" src/ bin/ --include="*.js" | grep -v "node_modules"
+
+# Regex patterns (ReDoS risk)
+grep -rn "new RegExp\|\.match\|\.test\|\.replace" src/ bin/ --include="*.js"
+```
+
+**Record the results as an inventory:**
+
+```
+SECURITY-CRITICAL CALL-SITE INVENTORY
+═══════════════════════════════════════════════════
+Shell execution: [N] call sites
+  src/git-manager.js:45    execa('git', [...])         → array args ✅
+  src/validator-agent.js:112  execa('php', { shell: true }) → SHELL TRUE ❌
+  ...
+
+JSON.parse: [N] call sites
+  src/file-tools.js:67    JSON.parse(raw)             → no try/catch ❌
+  src/state-manager.js:34 JSON.parse(data)            → wrapped ✅
+  ...
+
+[etc. for each category]
+═══════════════════════════════════════════════════
+```
+
+Every ❌ in this inventory becomes a finding. Every ✅ is confirmed safe. During the
+per-file review (Step 3), cross-reference this inventory to ensure nothing was missed.
+
+### Step 3: File-by-File Security Review
 
 For each source file, apply the security checklist:
 
@@ -62,7 +113,7 @@ For each source file, apply the security checklist:
 Findings: [N] (or "Clean")
 ```
 
-### Step 3: Dependency Audit
+### Step 4: Dependency Audit
 
 ```bash
 npm audit 2>&1
@@ -74,7 +125,7 @@ Review `package.json` and `package-lock.json`:
 - Are any dependencies abandoned or unmaintained?
 - Are dependency versions pinned or using loose ranges?
 
-### Step 4: LLM Output Trust Analysis
+### Step 5: LLM Output Trust Analysis
 
 This is specific to AI-powered tools. Review every code path where LLM (Claude API)
 output is consumed:
@@ -95,7 +146,7 @@ output is consumed:
    - Shell commands with injected arguments
    - State corruption via crafted JSON
 
-### Step 5: Record Security Findings
+### Step 6: Record Security Findings
 
 Use the same finding format as Agent 2, but with security-specific categories:
 

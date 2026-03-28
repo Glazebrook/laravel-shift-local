@@ -4,9 +4,9 @@
  * blocking the event loop with appendFileSync on every log line.
  */
 
-import { appendFileSync, mkdirSync } from 'fs';
-import { appendFile } from 'fs/promises';
-import { join } from 'path';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 let chalk;
 let chalkLoadFailed = false;
@@ -54,6 +54,7 @@ export class Logger {
 
     // M4 FIX: Write buffer for async log file writes
     this._buffer = [];
+    this._flushing = false; // P2-009 FIX: Guard against concurrent flushes
     this._flushInterval = setInterval(() => this._flushBuffer(), 1000);
     this._flushInterval.unref(); // Don't keep process alive for logging
 
@@ -74,7 +75,12 @@ export class Logger {
    */
   _write(level, agent, message, data = null) {
     const timestamp = new Date().toISOString();
-    const line = `[${timestamp}] [${level}] [${agent}] ${message}${data ? ' ' + JSON.stringify(data) : ''}\n`;
+    let line = `[${timestamp}] [${level}] [${agent}] ${message}${data ? ' ' + JSON.stringify(data) : ''}\n`;
+    // SEC-009 FIX: Scrub ANTHROPIC_API_KEY from log output to prevent credential leaks
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (apiKey && apiKey.length > 0) {
+      line = line.replaceAll(apiKey, '[REDACTED]');
+    }
     this._buffer.push(line);
 
     // Auto-flush if buffer gets large
@@ -90,10 +96,17 @@ export class Logger {
    */
   async _flushBuffer() {
     if (this._buffer.length === 0) return;
+    // P2-009 FIX: Prevent concurrent flushes — interval can fire while previous flush is still writing
+    if (this._flushing) return;
+    this._flushing = true;
     const lines = this._buffer.splice(0);
     try {
       await appendFile(this.logPath, lines.join(''));
-    } catch { /* non-fatal */ }
+    } catch (err) {
+      process.stderr.write(`[Logger] Failed to flush buffer to ${this.logPath}: ${err.message}\n`);
+    } finally {
+      this._flushing = false;
+    }
   }
 
   /**

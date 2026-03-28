@@ -11,8 +11,8 @@
 import { PHASES } from './state-manager.js';
 import { GitManager } from './git-manager.js';
 import { FileTools } from './file-tools.js';
-import { existsSync, writeFileSync, unlinkSync, readFileSync, mkdirSync, statSync, utimesSync } from 'fs';
-import { join } from 'path';
+import { existsSync, writeFileSync, unlinkSync, readFileSync, mkdirSync, statSync, utimesSync } from 'node:fs';
+import { join } from 'node:path';
 import { AnalyzerAgent } from './agents/analyzer-agent.js';
 import { PlannerAgent } from './agents/planner-agent.js';
 import { DependencyAgent } from './agents/dependency-agent.js';
@@ -21,7 +21,7 @@ import { ValidatorAgent } from './agents/validator-agent.js';
 import { ReporterAgent } from './agents/reporter-agent.js';
 
 import { ShiftBaseError } from './errors.js';
-import { execFileSync } from 'child_process';
+import { execFileSync } from 'node:child_process';
 // L1 FIX: Use shared sleep utility instead of duplicating
 import { sleep } from './utils.js';
 
@@ -431,8 +431,8 @@ export class Orchestrator {
         this.fileTools.writeFile(gitignorePath, content + addition);
         await this.logger.info('Orchestrator', 'Added .shift/ to .gitignore');
       }
-    } catch {
-      await this.logger.warn('Orchestrator', 'Could not update .gitignore');
+    } catch (err) {
+      await this.logger.warn('Orchestrator', `Could not update .gitignore: ${err.message}`);
     }
   }
 
@@ -545,6 +545,11 @@ export class Orchestrator {
       if (process.platform === 'win32') {
         // LOW-1 FIX: Use PowerShell to check disk space on Windows
         const driveLetter = this.projectPath.charAt(0).toUpperCase();
+        // SEC-009 FIX: Validate driveLetter is a single alpha char A-Z before interpolation
+        if (!/^[A-Z]$/.test(driveLetter)) {
+          await this.logger.warn('Orchestrator', `Cannot check disk space: invalid drive letter '${driveLetter}'`);
+          return;
+        }
         const output = execFileSync('powershell', [
           '-NoProfile', '-Command',
           `(Get-PSDrive ${driveLetter}).Free / 1MB`,

@@ -64,8 +64,8 @@
  * @property {{filepath: string, imports: string[]}[]} newImports
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync, rmSync, renameSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync, rmSync, renameSync } from 'node:fs';
+import { join } from 'node:path';
 
 // FINDING-15 FIX: Named constants for magic numbers
 const MANIFEST_CAP = 500;           // Max entries per manifest array
@@ -323,6 +323,7 @@ export class StateManager {
   }
 
   logError(phase, error, fatal = false) {
+    this._requireState();
     const entry = {
       timestamp: new Date().toISOString(),
       phase,
@@ -340,12 +341,14 @@ export class StateManager {
   }
 
   incrementRetry(phase) {
+    this._requireState();
     this.state.retries[phase] = (this.state.retries[phase] || 0) + 1;
     this.save();
     return this.state.retries[phase];
   }
 
   getRetryCount(phase) {
+    this._requireState();
     return this.state.retries[phase] || 0;
   }
 
@@ -356,6 +359,7 @@ export class StateManager {
    * without first setting 'in_progress'.
    */
   setFileStatus(filepath, status, meta = {}) {
+    this._requireState();
     const prev = this.state.transformations.files[filepath];
     this.state.transformations.files[filepath] = {
       status,
@@ -386,6 +390,7 @@ export class StateManager {
   }
 
   getFileStatus(filepath) {
+    this._requireState();
     return this.state.transformations.files[filepath]?.status || 'pending';
   }
 

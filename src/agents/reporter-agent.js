@@ -5,7 +5,7 @@
  */
 
 import { BaseAgent } from './base-agent.js';
-import { join } from 'path';
+import { join } from 'node:path';
 
 export class ReporterAgent extends BaseAgent {
   constructor(deps) {
@@ -145,6 +145,11 @@ Return the structured JSON now.`,
     return String(str).replace(/\|/g, '\\|').replace(/`/g, '\\`');
   }
 
+  /** A2-006 FIX: Strip triple-backtick sequences from content embedded in code fences */
+  _escCodeFence(str) {
+    return String(str).replace(/`{3,}/g, '``');
+  }
+
   _renderReport(data, context) {
     const { fromVersion, toVersion, branchName, transformations, validation, gitLog, phaseTimings } = context;
 
@@ -197,7 +202,7 @@ Return the structured JSON now.`,
         md += `### ${this._escMd(item.file || 'General')}\n\n`;
         md += `${this._escMd(item.issue)}\n\n`;
         if (item.suggestedPrompt) {
-          md += `<details>\n<summary>Claude prompt for this item</summary>\n\n\`\`\`\n${item.suggestedPrompt}\n\`\`\`\n\n</details>\n\n`;
+          md += `<details>\n<summary>Claude prompt for this item</summary>\n\n\`\`\`\n${this._escCodeFence(item.suggestedPrompt)}\n\`\`\`\n\n</details>\n\n`;
         }
       }
     }
@@ -206,7 +211,7 @@ Return the structured JSON now.`,
     md += `## Test Results\n\n`;
     md += `${data.testSummary || 'Tests were not run.'}\n\n`;
     if (validation?.testsRun?.output) {
-      md += `<details>\n<summary>Test output</summary>\n\n\`\`\`\n${validation.testsRun.output}\n\`\`\`\n\n</details>\n\n`;
+      md += `<details>\n<summary>Test output</summary>\n\n\`\`\`\n${this._escCodeFence(validation.testsRun.output)}\n\`\`\`\n\n</details>\n\n`;
     }
 
     // Warnings
@@ -245,7 +250,7 @@ Return the structured JSON now.`,
 
     // Git Log
     if (gitLog) {
-      md += `## Git Log\n\n\`\`\`\n${gitLog}\n\`\`\`\n`;
+      md += `## Git Log\n\n\`\`\`\n${this._escCodeFence(gitLog)}\n\`\`\`\n`;
     }
 
     return md;

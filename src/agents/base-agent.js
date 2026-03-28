@@ -343,11 +343,28 @@ export class BaseAgent {
    * M9 FIX: Adds jitter to retry delays to prevent thundering herd.
    */
   async _callWithRetry(params) {
+    if (this.maxRetries <= 0) {
+      // No retries — single attempt with timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+      timeoutId.unref(); // A2-011 FIX: Allow process exit during graceful shutdown
+      try {
+        const response = await this.client.messages.create(params, {
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        return response;
+      } catch (err) {
+        clearTimeout(timeoutId);
+        throw err;
+      }
+    }
     let lastErr;
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+        timeoutId.unref(); // A2-011 FIX: Allow process exit during graceful shutdown
 
         try {
           const response = await this.client.messages.create(params, {

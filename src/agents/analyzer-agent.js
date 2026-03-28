@@ -4,8 +4,8 @@
  */
 
 import { BaseAgent } from './base-agent.js';
-import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 export class AnalyzerAgent extends BaseAgent {
   constructor(deps) {
@@ -124,7 +124,11 @@ Then scan for patterns that will need changing based on the upgrade guide from L
         return;
       }
       const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
-      const frameworkPkg = lock.packages?.find(p => p.name === 'laravel/framework');
+      if (!lock || !Array.isArray(lock.packages)) {
+        await this.logger.warn(this.name, 'composer.lock is missing or has no packages array — cannot verify installed Laravel version');
+        return;
+      }
+      const frameworkPkg = lock.packages.find(p => p.name === 'laravel/framework');
       if (!frameworkPkg) {
         await this.logger.warn(this.name, 'laravel/framework not found in composer.lock — cannot verify version');
         return;

@@ -24,9 +24,15 @@ export class GitManager {
     // Git args come from internal code (not LLM), but defence-in-depth applies.
     if (process.platform === 'win32') {
       // P1-004 FIX: Removed * (glob wildcard) from allowed characters
-      const SAFE_ARG_RE = /^[a-zA-Z0-9:_\-/.=^~@ ]+$/;
+      // SEC-005 FIX: Args with spaces are allowed but go through the quoting logic
+      // below. Reject args containing quote chars to prevent Windows quoting bypass.
+      // A3-003 FIX: Removed unused SAFE_ARG_RE — only SAFE_SPACED_RE is checked.
+      const SAFE_SPACED_RE = /^[a-zA-Z0-9:_\-/.=^~@ ]+$/;
       for (const arg of args) {
-        if (!SAFE_ARG_RE.test(arg)) {
+        if (arg.includes('"') || arg.includes("'") || arg.includes('`')) {
+          return { ok: false, stdout: '', stderr: `Blocked unsafe git argument (contains quotes): ${arg}` };
+        }
+        if (!SAFE_SPACED_RE.test(arg)) {
           return { ok: false, stdout: '', stderr: `Blocked unsafe git argument: ${arg}` };
         }
       }

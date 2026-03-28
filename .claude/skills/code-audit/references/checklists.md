@@ -6,6 +6,20 @@ audit run, eliminating the randomness of "what the AI happens to notice."
 Agents 2 (Audit) and 3 (Security) apply these checklists to every source file in
 the coverage manifest.
 
+## How to Use These Checklists
+
+**CRITICAL: "Check" means "verify EVERY instance", not "generally assess".**
+
+When a checklist item says to check something, you must:
+1. Search the file for ALL instances of the relevant pattern (grep, ctrl+f, or read line by line)
+2. Verify EACH instance individually
+3. If ANY instance fails, record a finding that lists ALL failing instances
+
+A checklist item is ✅ only when EVERY instance in the file passes.
+A checklist item is ❌ if even ONE instance fails — and the finding must list ALL failing instances.
+
+Do NOT mark an item ✅ based on a general impression. Count the instances. Verify each one.
+
 ---
 
 ## General Audit Checklist (Agent 2)
@@ -20,10 +34,10 @@ Apply every item to every source file. Mark as ✅ pass, ❌ fail (= finding), o
 - [ ] Array/object destructuring has defaults where the source could be undefined
 
 ### 2. Promise & Async Error Handling
-- [ ] Every `async` function has try/catch or the caller handles rejection
-- [ ] No `.catch(() => {})` swallowing errors silently
-- [ ] No unhandled promise rejections (fire-and-forget async calls)
-- [ ] `await` used consistently (no mixing `.then()` chains in async functions)
+- [ ] EVERY `async` function has try/catch or the caller handles rejection (search: `async `)
+- [ ] ZERO instances of `.catch(() => {})` swallowing errors (search: `.catch`)
+- [ ] ZERO unhandled promise rejections (search: fire-and-forget async calls without await)
+- [ ] `await` used consistently — no mixing `.then()` chains in async functions
 - [ ] Error context preserved when re-throwing (original error in cause or message)
 
 ### 3. Input Validation
@@ -40,21 +54,22 @@ Apply every item to every source file. Mark as ✅ pass, ❌ fail (= finding), o
 - [ ] Relative paths resolved before use
 
 ### 5. Shell Command Safety
-- [ ] No string interpolation in exec/spawn command strings
-- [ ] Array-based arguments used for spawn/execFile
-- [ ] Glob characters rejected or escaped in user/LLM-provided arguments
-- [ ] Shell metacharacters (`;`, `|`, `&&`, `` ` ``) not passable in arguments
+- [ ] EVERY exec/spawn/execa call in this file uses array-based arguments (search: `exec`, `spawn`, `execa`)
+- [ ] ZERO instances of `shell: true` unless justified with an inline comment explaining why
+- [ ] ZERO instances of string interpolation in command strings
+- [ ] Glob characters rejected or escaped in ALL user/LLM-provided arguments
+- [ ] Shell metacharacters (`;`, `|`, `&&`, `` ` ``) not passable in ANY argument
 
 ### 6. JSON Parsing Safety
-- [ ] Every `JSON.parse()` wrapped in try/catch
-- [ ] Error messages include context (what was being parsed, first N chars of raw input)
-- [ ] LLM-generated JSON validated for expected schema after parsing
-- [ ] Truncated/partial JSON handled gracefully (not just thrown as parse error)
+- [ ] EVERY `JSON.parse()` call in this file is wrapped in try/catch (search: `JSON.parse`)
+- [ ] EVERY catch block includes context: what was being parsed, filepath, first N chars of raw input
+- [ ] LLM-generated JSON validated for expected schema AFTER parsing (not just parse success)
+- [ ] Truncated/partial JSON handled gracefully (not just thrown as generic parse error)
 
 ### 7. File I/O Atomicity
-- [ ] Write operations use atomic pattern (write temp → rename)
+- [ ] EVERY write operation in this file identified (search: `writeFile`, `appendFile`, `createWriteStream`)
+- [ ] Critical writes use atomic pattern (write temp → rename) OR have documented recovery mechanism
 - [ ] Read operations check for orphaned temp files and recover
-- [ ] File permissions appropriate (not world-readable for sensitive data)
 - [ ] File handles cleaned up (streams closed, descriptors released)
 - [ ] Large files streamed rather than fully loaded into memory
 

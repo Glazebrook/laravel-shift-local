@@ -13,9 +13,9 @@ if (parseInt(major) < 20) {
  */
 
 import { Command } from 'commander';
-import { resolve, join } from 'path';
-import { existsSync, readFileSync, statSync } from 'fs';
-import { createRequire } from 'module';
+import { resolve, join } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { KNOWN_VERSIONS, SPECULATIVE_VERSIONS } from '../src/state-manager.js';
 import { ShiftBaseError } from '../src/errors.js';
 
@@ -94,7 +94,16 @@ program
   .option('-p, --path <path>', 'Path to Laravel project', process.cwd())
   .option('--json', 'Output machine-readable JSON to stdout')
   .action(async (opts) => {
-    await showStatus(opts);
+    try {
+      await showStatus(opts);
+    } catch (err) {
+      if (opts.json) {
+        console.log(JSON.stringify({ active: false, error: err.message }));
+      } else {
+        console.error('\n❌ Status check failed:', err.message);
+      }
+      process.exit(1);
+    }
   });
 
 // ── reset command ─────────────────────────────────────────────────
@@ -328,8 +337,14 @@ function loadConfig(projectPath, cliOpts = {}) {
           if (rc.behaviour.maxTotalTokens !== undefined) config.maxTotalTokens = rc.behaviour.maxTotalTokens;
         }
         // Merge model overrides
-        if (rc.models) {
-          config.models = { ...rc.models };
+        // SEC-001 FIX: Filter prototype pollution keys from .shiftrc models
+        if (rc.models && typeof rc.models === 'object') {
+          const safeModels = {};
+          for (const [key, value] of Object.entries(rc.models)) {
+            if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+            safeModels[key] = value;
+          }
+          config.models = safeModels;
         }
         // Merge exclude patterns
         if (rc.exclude) {

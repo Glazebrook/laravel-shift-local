@@ -236,7 +236,7 @@ ${searchPatterns.map((p, i) => `Pattern ${i + 1}:\n  Find: ${p}\n  Replace: ${re
 ` : ''}
 
 CONTEXT FROM ANALYSIS:
-- Laravel version upgrade: ${analysis.laravelVersion} -> target
+- Laravel version upgrade: ${analysis.laravelVersion} -> ${this.stateManager?.get('toVersion') || 'next'}
 - PHP version: ${analysis.phpVersion}
 ${manifestContext}
 

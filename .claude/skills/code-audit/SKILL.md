@@ -43,6 +43,18 @@ Store these values — every agent receives them:
 
 If `npm test` has any failures before changes, STOP. The codebase must be green first.
 
+### Check for Prior Audit Reports
+```bash
+# Look for previous audit reports
+find . -name "AUDIT_REPORT*" -o -name "audit-report*" | head -5
+ls -la .shift/AUDIT_REPORT.md 2>/dev/null
+```
+
+If a prior audit report exists:
+- Read it and extract the findings table
+- Pass the prior findings list to Agent 2 (Audit) and Agent 3 (Security) as PRIOR_FINDINGS
+- Agent 7 (Reporter) must include a regression comparison section
+
 ---
 
 ## Agent Pipeline — Strict Sequential Execution

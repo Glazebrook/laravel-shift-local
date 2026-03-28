@@ -4,7 +4,23 @@
       "Bash(wc -l /c/Projects/laravel-shift-local/test/*.test.js)",
       "Bash(node --test test/core.test.js test/extended.test.js test/integration.test.js test/orchestrator.test.js test/base-agent.test.js test/git-manager.test.js test/cli.test.js)",
       "Bash(npm test:*)",
-      "Bash(find test:*)"
+      "Bash(find test:*)",
+      "Bash(npm audit:*)",
+      "Bash(npm outdated:*)",
+      "Bash(npm show:*)",
+      "Bash(npm install:*)",
+      "Bash(find /c/Projects/laravel-shift-local/src -type f -name *.js)",
+      "Bash(find /c/Projects/laravel-shift-local/bin -type f -name *.js)",
+      "Bash(find /c/Projects/laravel-shift-local/config -type f -name *.js)",
+      "Bash(find /c/Projects/laravel-shift-local/test -type f -name *.js)",
+      "Bash(wc -l /c/Projects/laravel-shift-local/test/*.js)",
+      "Bash(node -e \"const t = require\\(''./test/audit-fixes.test.js''\\); console.log\\(''test file exists''\\)\")",
+      "Bash(npx jest:*)",
+      "Bash(node --test)",
+      "Bash(find . -name AUDIT_REPORT* -o -name audit-report*)",
+      "Bash(wc -l ./test/*.test.js)",
+      "Bash(wc -l src/**/*.js bin/*.js config/*.js)",
+      "Bash(wc -l /c/Projects/laravel-shift-local/src/agents/*.js)"
     ]
   }
 }

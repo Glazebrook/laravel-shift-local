@@ -6,11 +6,11 @@ import {
   readFileSync, writeFileSync, copyFileSync,
   existsSync, mkdirSync, readdirSync, statSync,
   unlinkSync, realpathSync,
-} from 'fs';
-import { join, dirname, relative, resolve, sep, normalize } from 'path';
+} from 'node:fs';
+import { join, dirname, relative, resolve, sep, normalize, basename } from 'node:path';
 import { glob } from 'glob';
 // MED-3 FIX: Use crypto for stronger boundary randomness
-import { randomUUID } from 'crypto';
+import { randomUUID } from 'node:crypto';
 
 export class FileTools {
   constructor(projectPath, logger, excludeConfig = {}) {
@@ -29,7 +29,12 @@ export class FileTools {
   }
 
   readJson(filepath) {
-    return JSON.parse(this.readFile(filepath));
+    const raw = this.readFile(filepath);
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      throw new Error(`Invalid JSON in ${filepath}: ${err.message}`);
+    }
   }
 
   // ─── Write ─────────────────────────────────────────────────────
@@ -289,8 +294,9 @@ export class FileTools {
               /auth\.json$/i,                     // Composer auth tokens
             ];
             const normalizedPath = filepath.replace(/\\/g, '/');
-            const basename = normalizedPath.split('/').pop();
-            if (SENSITIVE_PATTERNS.some(p => p.test(basename) || p.test(normalizedPath))) {
+            // SEC-003 FIX: Use path.basename() instead of string split for robust extraction
+            const fileBasename = basename(normalizedPath);
+            if (SENSITIVE_PATTERNS.some(p => p.test(fileBasename) || p.test(normalizedPath))) {
               return { error: `Blocked: '${filepath}' appears to be a sensitive file (credentials/secrets). It will not be sent to the API.` };
             }
             // FINDING-12 FIX: Guard against oversized files that could blow up context
@@ -345,6 +351,13 @@ export class FileTools {
               }
             }
 
+            // SEC-007 FIX: Block writes of executable script extensions that an LLM should never create
+            const BLOCKED_EXTENSIONS = ['.sh', '.bat', '.cmd', '.ps1', '.exe', '.com', '.msi', '.vbs', '.wsf'];
+            const ext = filepath.toLowerCase().substring(filepath.lastIndexOf('.'));
+            if (BLOCKED_EXTENSIONS.includes(ext)) {
+              return { error: `Cannot write executable file type (${ext}): ${filepath}` };
+            }
+
             // FIX #15: Block writes to excluded directories
             if (self._isExcludedPath(filepath)) {
               return { error: `Cannot write to excluded path: ${filepath}` };
@@ -371,6 +384,10 @@ export class FileTools {
         list_files: async ({ pattern }) => {
           await self.logger.tool('FileTools', `list_files: ${pattern}`);
           try {
+            // SEC-002 FIX: Reject glob patterns containing path traversal or absolute paths
+            if (pattern.includes('..') || pattern.startsWith('/') || pattern.startsWith('\\')) {
+              return { error: `Blocked: glob pattern '${pattern}' contains path traversal or absolute path segments` };
+            }
             const files = await self.findFiles(pattern);
             return { files };
           } catch (e) {
