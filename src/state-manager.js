@@ -304,6 +304,18 @@ export class StateManager {
     this.save();
   }
 
+  setTokenUsage(agentName, usage) {
+    this._requireState();
+    if (!this.state.tokenUsage) this.state.tokenUsage = {};
+    this.state.tokenUsage[agentName] = usage;
+    this.save();
+  }
+
+  getTokenUsage() {
+    this._requireState();
+    return this.state.tokenUsage || {};
+  }
+
   setPhase(phase) {
     this._requireState();
     this.state.currentPhase = phase;

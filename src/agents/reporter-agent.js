@@ -22,6 +22,7 @@ export class ReporterAgent extends BaseAgent {
     const {
       fromVersion, toVersion, analysis,
       transformations, validation, branchName, phaseTimings,
+      tokenUsage,
     } = state;
 
     const gitLog = await this.git.getLog(20);
@@ -120,7 +121,7 @@ Return the structured JSON now.`,
     // H7 FIX: Render report from template with validated data
     const report = this._renderReport(reportData, {
       fromVersion, toVersion, branchName, transformations, validation,
-      gitLog, phaseTimings: phaseTimings || {},
+      gitLog, phaseTimings: phaseTimings || {}, tokenUsage: tokenUsage || {},
     });
 
     const reportRelPath = 'SHIFT_REPORT.md';
@@ -151,7 +152,7 @@ Return the structured JSON now.`,
   }
 
   _renderReport(data, context) {
-    const { fromVersion, toVersion, branchName, transformations, validation, gitLog, phaseTimings } = context;
+    const { fromVersion, toVersion, branchName, transformations, validation, gitLog, phaseTimings, tokenUsage } = context;
 
     // M3 FIX: Calculate total duration
     const totalMs = Object.values(phaseTimings).reduce((sum, t) => sum + (t.durationMs || 0), 0);
@@ -183,6 +184,24 @@ Return the structured JSON now.`,
         md += `| ${phase} | ${(timing.durationMs / 1000).toFixed(1)}s |\n`;
       }
       md += `\n`;
+    }
+
+    // Token Usage
+    if (tokenUsage && Object.keys(tokenUsage).length > 0) {
+      md += `## Token Usage\n\n`;
+      md += `| Agent | Input Tokens | Output Tokens | API Calls |\n`;
+      md += `|-------|-------------|---------------|-----------|\n`;
+      let totalInput = 0, totalOutput = 0, totalCalls = 0;
+      for (const [agent, usage] of Object.entries(tokenUsage)) {
+        const inp = usage.input || 0;
+        const out = usage.output || 0;
+        const calls = usage.calls || 0;
+        totalInput += inp;
+        totalOutput += out;
+        totalCalls += calls;
+        md += `| ${agent} | ${inp.toLocaleString()} | ${out.toLocaleString()} | ${calls} |\n`;
+      }
+      md += `| **Total** | **${totalInput.toLocaleString()}** | **${totalOutput.toLocaleString()}** | **${totalCalls}** |\n\n`;
     }
 
     // Automatic Changes

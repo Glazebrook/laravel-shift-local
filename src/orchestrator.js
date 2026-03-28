@@ -88,6 +88,9 @@ export class Orchestrator {
       reporter: new ReporterAgent(agentDeps),
     };
 
+    // Per-agent token usage report
+    this._tokenReport = {};
+
     // C1 FIX: Setup synchronous signal handlers
     this._setupSignalHandlers();
   }
@@ -591,6 +594,20 @@ export class Orchestrator {
     }
   }
 
+  // ─── Token tracking ─────────────────────────────────────────
+
+  _captureTokenUsage(agentName) {
+    const agent = this.agents[agentName];
+    if (!agent) return;
+    const usage = agent.tokenUsage;
+    this._tokenReport[agentName] = usage;
+    this.state.setTokenUsage(agentName, usage);
+  }
+
+  getTokenReport() {
+    return { ...this._tokenReport };
+  }
+
   // ─── Phase handlers ──────────────────────────────────────────
 
   async _phaseCommit(phase, details = '') {
@@ -607,6 +624,7 @@ export class Orchestrator {
   async _runAnalysis() {
     const s = this.state.get();
     const analysis = await this.agents.analyzer.analyze(s.fromVersion, s.toVersion);
+    this._captureTokenUsage('analyzer');
     this.state.set('analysis', analysis);
     await this.logger.success('Orchestrator', `Analysis complete: ${analysis.upgradeComplexity} complexity, ${analysis.filesToTransform?.length || 0} files to transform`);
     await this._phaseCommit('analysis', `${analysis.upgradeComplexity} complexity`);
@@ -625,6 +643,7 @@ export class Orchestrator {
       .map(([k, v]) => ({ filepath: k, description: v.description || '' }));
 
     const plan = await this.agents.planner.plan(s.analysis, s.fromVersion, s.toVersion, completedFiles);
+    this._captureTokenUsage('planner');
 
     // M4 FIX: Validate that the plan has the expected structure.
     // If the LLM returns valid JSON missing .phases, we'd silently proceed
@@ -676,6 +695,7 @@ export class Orchestrator {
       return;
     }
     const result = await this.agents.dependency.updateDependencies(s.plan);
+    this._captureTokenUsage('dependency');
     this.state.set('dependencyResult', result);
     await this._phaseCommit('dependencies', 'composer.json updated');
     await this.logger.success('Orchestrator', 'Dependencies updated');
@@ -688,6 +708,7 @@ export class Orchestrator {
       return;
     }
     const results = await this.agents.transformer.transform(s.plan, s.analysis);
+    this._captureTokenUsage('transformer');
     await this._phaseCommit('transforms', `${results.transformed.length} files transformed`);
     await this.logger.success('Orchestrator', `Transforms: ${results.transformed.length} done, ${results.failed.length} failed, ${results.skipped.length} skipped`);
   }
@@ -695,6 +716,7 @@ export class Orchestrator {
   async _runValidation() {
     const s = this.state.get();
     const validation = await this.agents.validator.validate(s.analysis || {}, s.plan || {}, { runTests: this.config.runTests });
+    this._captureTokenUsage('validator');
     this.state.set('validation', validation);
     await this._phaseCommit('validation', validation.passed ? 'PASSED' : 'WARNINGS');
     if (validation.passed) {
@@ -707,6 +729,7 @@ export class Orchestrator {
   async _runReporting() {
     const s = this.state.get();
     const report = await this.agents.reporter.generateReport(s);
+    this._captureTokenUsage('reporter');
     this.state.set('report', report);
     await this._phaseCommit('report', 'SHIFT_REPORT.md generated');
     await this.logger.success('Orchestrator', `Report: ${report.reportPath}`);
