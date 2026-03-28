@@ -11,6 +11,7 @@ import { join, dirname, relative, resolve, sep, normalize, basename } from 'node
 import { glob } from 'glob';
 // MED-3 FIX: Use crypto for stronger boundary randomness
 import { randomUUID } from 'node:crypto';
+import { FileToolsError, ParseError, PathTraversalError } from './errors.js';
 
 export class FileTools {
   constructor(projectPath, logger, excludeConfig = {}) {
@@ -24,7 +25,7 @@ export class FileTools {
   // ─── Read ──────────────────────────────────────────────────────
   readFile(filepath) {
     const abs = this._abs(filepath);
-    if (!existsSync(abs)) throw new Error(`File not found: ${filepath}`);
+    if (!existsSync(abs)) throw new FileToolsError(`File not found: ${filepath}`, { filePath: filepath, operation: 'read' });
     return readFileSync(abs, 'utf8');
   }
 
@@ -33,7 +34,7 @@ export class FileTools {
     try {
       return JSON.parse(raw);
     } catch (err) {
-      throw new Error(`Invalid JSON in ${filepath}: ${err.message}`);
+      throw new ParseError(`Invalid JSON in ${filepath}: ${err.message}`, { filePath: filepath, rawPreview: raw?.substring(0, 200) });
     }
   }
 
@@ -57,7 +58,7 @@ export class FileTools {
     const resolvedBackup = resolve(backupPath);
     const backupPrefix = this.backupDir + (this.backupDir.endsWith(sep) ? '' : sep);
     if (resolvedBackup !== this.backupDir && !resolvedBackup.startsWith(backupPrefix)) {
-      throw new Error(`Backup path traversal blocked: ${filepath}`);
+      throw new PathTraversalError(`Backup path traversal blocked: ${filepath}`, { requestedPath: filepath, resolvedPath: resolvedBackup });
     }
     mkdirSync(dirname(backupPath), { recursive: true });
     if (!existsSync(abs)) {
@@ -86,7 +87,7 @@ export class FileTools {
       return;
     }
 
-    if (!existsSync(backupPath)) throw new Error(`No backup for: ${filepath}`);
+    if (!existsSync(backupPath)) throw new FileToolsError(`No backup for: ${filepath}`, { filePath: filepath, operation: 'restore' });
     const abs = this._abs(filepath);
     mkdirSync(dirname(abs), { recursive: true });
     copyFileSync(backupPath, abs);
@@ -174,7 +175,7 @@ export class FileTools {
     const prefix = this.projectPath + (this.projectPath.endsWith(sep) ? '' : sep);
     // Check logical path stays within project
     if (resolved !== this.projectPath && !resolved.startsWith(prefix)) {
-      throw new Error(`Path traversal blocked: ${filepath}`);
+      throw new PathTraversalError(`Path traversal blocked: ${filepath}`, { requestedPath: filepath, resolvedPath: resolved });
     }
     // SEC-1 FIX: Check every existing ancestor for symlink escape,
     // even when the target file itself does not yet exist.
@@ -184,11 +185,11 @@ export class FileTools {
         try {
           const real = realpathSync(checkPath);
           if (real !== this.projectPath && !real.startsWith(prefix)) {
-            throw new Error(`Symlink escape blocked: ${filepath} -> ${real}`);
+            throw new PathTraversalError(`Symlink escape blocked: ${filepath} -> ${real}`, { requestedPath: filepath, resolvedPath: real });
           }
         } catch (err) {
           // If the error is our own security error, re-throw it
-          if (err.message.startsWith('Symlink escape blocked')) throw err;
+          if (err.code === 'SHIFT_TRAVERSAL') throw err;
           // Otherwise (e.g., permission error), let it through — the actual
           // read/write operation will fail with a meaningful error
         }
