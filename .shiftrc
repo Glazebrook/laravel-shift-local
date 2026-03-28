@@ -1,0 +1,48 @@
+{
+  "_comment": "Laravel Shift Local configuration file. Place in project root. All keys are optional.",
+
+  "shift": {
+    "_comment": "Default --from/--to versions. CLI flags override these.",
+    "fromVersion": null,
+    "toVersion": null
+  },
+
+  "behaviour": {
+    "failFast": false,
+    "maxFileRetries": 3,
+    "commitAfterEachPhase": true,
+    "runTests": true,
+    "verbose": false,
+    "composerTimeout": 600
+  },
+
+  "exclude": {
+    "paths": [
+      "vendor",
+      "node_modules",
+      "storage",
+      "bootstrap/cache",
+      ".git",
+      ".shift"
+    ],
+    "filePatterns": [
+      "*.min.js",
+      "*.min.css"
+    ]
+  },
+
+  "git": {
+    "branchPrefix": "shift/upgrade",
+    "commitPrefix": "[shift]",
+    "createBackupTag": true
+  },
+
+  "models": {
+    "analyzer": "claude-opus-4-6",
+    "planner": "claude-opus-4-6",
+    "dependency": "claude-sonnet-4-6",
+    "transformer": "claude-sonnet-4-6",
+    "validator": "claude-sonnet-4-6",
+    "reporter": "claude-sonnet-4-6"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "name": "laravel-shift-local",
+  "version": "1.4.0",
+  "description": "Enterprise-grade automated Laravel upgrade orchestrator powered by Claude multi-agent pipeline",
+  "bin": {
+    "shift": "./bin/shift.js"
+  },
+  "type": "module",
+  "scripts": {
+    "start": "node bin/shift.js",
+    "upgrade": "node bin/shift.js upgrade",
+    "status": "node bin/shift.js status",
+    "resume": "node bin/shift.js resume",
+    "rollback": "node bin/shift.js rollback",
+    "test": "node --test test/core.test.js test/extended.test.js test/integration.test.js test/orchestrator.test.js test/base-agent.test.js test/git-manager.test.js test/cli.test.js",
+    "lint": "eslint src/ test/ bin/ config/",
+    "lint:fix": "eslint --fix src/ test/ bin/ config/",
+    "format": "prettier --write \"src/**/*.js\" \"test/**/*.js\" \"bin/**/*.js\" \"config/**/*.js\"",
+    "format:check": "prettier --check \"src/**/*.js\" \"test/**/*.js\" \"bin/**/*.js\" \"config/**/*.js\"",
+    "postinstall": "echo 'Laravel Shift Local installed. Run: shift upgrade --from=X --to=Y'"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.0",
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "glob": "^11.0.0",
+    "execa": "^9.0.0",
+    "boxen": "^8.0.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.3.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=9.0.0"
+  }
+}
