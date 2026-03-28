@@ -1036,20 +1036,24 @@ describe('AUDIT-4 SEC-009: Logger scrubs API key from log output', () => {
 
 // ── AUDIT-4 SEC-010: validator-agent uses shell:false for PHP syntax ──
 
-describe('AUDIT-4 SEC-010: ValidatorAgent _phpSyntaxCheck uses shell:false', () => {
-  it('source code sets shell: false in syntax check options', async () => {
+describe('AUDIT-4 SEC-010: ValidatorAgent _phpSyntaxCheck uses centralised shell (no shell:true)', () => {
+  it('source code uses execCommand from shell.js (shell defaults to false)', async () => {
     const { readFileSync } = await import('fs');
     const { resolve } = await import('path');
     const src = readFileSync(resolve('src/agents/validator-agent.js'), 'utf8');
 
-    assert.ok(src.includes('shell: false'), 'Should explicitly set shell: false');
-    // Verify it's in the _phpSyntaxCheck method context
+    // Verify it uses the centralised execCommand (which defaults to shell: false)
+    assert.ok(src.includes("import { execCommand } from '../shell.js'"),
+      'Should import execCommand from shell.js');
     const syntaxCheckSection = src.substring(
       src.indexOf('async _phpSyntaxCheck'),
       src.indexOf('async _artisan')
     );
-    assert.ok(syntaxCheckSection.includes('shell: false'),
-      'shell: false should be within _phpSyntaxCheck method');
+    assert.ok(syntaxCheckSection.includes('execCommand'),
+      'execCommand should be used within _phpSyntaxCheck method');
+    // Must NOT set shell: true in syntax check
+    assert.ok(!syntaxCheckSection.includes('shell: true'),
+      'shell: true must not appear in _phpSyntaxCheck');
   });
 });
 
@@ -1271,50 +1275,40 @@ describe('SEC-024: Minimal env allowlist in ValidatorAgent._artisan', () => {
       'Should NOT spread process.env — use ENV_ALLOWLIST instead');
   });
 
-  it('source defines ENV_ALLOWLIST with required keys', async () => {
+  it('source uses centralised shell.js envKeys for env filtering', async () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
     const src = readFileSync(resolve('src/agents/validator-agent.js'), 'utf8');
 
-    assert.ok(src.includes('ENV_ALLOWLIST'), 'Should define ENV_ALLOWLIST');
-
-    // Verify critical keys are in the allowlist
-    const requiredKeys = ['PATH', 'HOME', 'APP_ENV', 'DB_CONNECTION', 'DB_HOST', 'DB_DATABASE'];
+    // Env filtering is now centralised in shell.js via envKeys + buildMinimalEnv.
+    // Validator passes PHP/Laravel-specific keys via envKeys option.
+    assert.ok(src.includes('envKeys'), 'Should pass envKeys to execCommand');
+    const requiredKeys = ['APP_ENV', 'DB_CONNECTION', 'DB_HOST', 'DB_DATABASE'];
     for (const key of requiredKeys) {
       assert.ok(src.includes(`'${key}'`),
-        `ENV_ALLOWLIST should include '${key}'`);
+        `envKeys should include '${key}'`);
     }
   });
 
-  it('source does NOT include ANTHROPIC_API_KEY in allowlist', async () => {
+  it('source does NOT include ANTHROPIC_API_KEY in env config', async () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
     const src = readFileSync(resolve('src/agents/validator-agent.js'), 'utf8');
 
-    // Extract just the ENV_ALLOWLIST array definition from source
-    const allowlistStart = src.indexOf('ENV_ALLOWLIST');
-    assert.ok(allowlistStart !== -1, 'ENV_ALLOWLIST should be defined');
-    const allowlistEnd = src.indexOf('];', allowlistStart);
-    const allowlistSection = src.substring(allowlistStart, allowlistEnd + 2);
-
-    assert.ok(!allowlistSection.includes('ANTHROPIC_API_KEY'),
-      'ANTHROPIC_API_KEY must NOT appear in ENV_ALLOWLIST');
+    assert.ok(!src.includes('ANTHROPIC_API_KEY'),
+      'ANTHROPIC_API_KEY must NOT appear in validator-agent.js');
   });
 
-  it('env filtering logic builds minimalEnv from allowlist', async () => {
+  it('centralised shell.js BASE_ENV_KEYS does not include ANTHROPIC_API_KEY', async () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
-    const src = readFileSync(resolve('src/agents/validator-agent.js'), 'utf8');
+    const src = readFileSync(resolve('src/shell.js'), 'utf8');
 
-    // Verify the filtering pattern: Object.fromEntries + filter + map
-    assert.ok(src.includes('Object.fromEntries'),
-      'Should use Object.fromEntries to build minimal env');
-    assert.ok(src.includes('ENV_ALLOWLIST.filter'),
-      'Should filter ENV_ALLOWLIST against process.env');
-    assert.ok(src.includes("minimalEnv.APP_ENV = 'testing'"),
-      'Should force APP_ENV to testing');
-    assert.ok(src.includes('env: minimalEnv'),
-      'Should pass minimalEnv as the env option');
+    assert.ok(src.includes('BASE_ENV_KEYS'), 'Should define BASE_ENV_KEYS');
+    assert.ok(!src.includes('ANTHROPIC_API_KEY'),
+      'ANTHROPIC_API_KEY must NOT appear in shell.js BASE_ENV_KEYS');
+    assert.ok(src.includes("'PATH'"), 'BASE_ENV_KEYS should include PATH');
+    assert.ok(src.includes('buildMinimalEnv'), 'Should export buildMinimalEnv');
   });
 
   it('allowlist filtering produces correct subset', () => {
@@ -1380,31 +1374,36 @@ describe('A3-003: Dead code removal — SAFE_ARG_RE removed from git-manager', (
       'SAFE_ARG_RE should not exist at module level in git-manager.js');
   });
 
-  it('git-manager.js still defines SAFE_SPACED_RE for arg validation', async () => {
+  it('git-manager.js uses centralised shell.js for execution', async () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
     const src = readFileSync(resolve('src/git-manager.js'), 'utf8');
 
-    assert.ok(src.includes('SAFE_SPACED_RE'),
-      'SAFE_SPACED_RE should still exist for Windows arg validation');
+    // Arg validation is now centralised in shell.js via SAFE_ARG_RE.
+    // Git-manager only retains quote-char rejection for Windows defence-in-depth.
+    assert.ok(src.includes("import { execCommand } from './shell.js'"),
+      'Should import execCommand from shell.js');
+    assert.ok(!src.includes("import { execa }"),
+      'Should no longer directly import execa');
   });
 
-  it('git-manager.js comments reference A3-003 removal', async () => {
+  it('shell.js defines SAFE_ARG_RE for centralised arg validation', async () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
-    const src = readFileSync(resolve('src/git-manager.js'), 'utf8');
+    const src = readFileSync(resolve('src/shell.js'), 'utf8');
 
-    assert.ok(src.includes('A3-003 FIX'),
-      'Should have A3-003 FIX comment documenting the removal');
+    assert.ok(src.includes('SAFE_ARG_RE'),
+      'shell.js should define SAFE_ARG_RE for centralised arg validation');
   });
 
-  it('validator-agent.js still has its own local SAFE_ARG_RE (not removed)', async () => {
+  it('validator-agent.js uses centralised shell.js (no direct execa)', async () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
     const src = readFileSync(resolve('src/agents/validator-agent.js'), 'utf8');
 
-    // validator-agent has its own SAFE_ARG_RE for artisan arg validation — this is NOT dead code
-    assert.ok(src.includes('SAFE_ARG_RE'),
-      'validator-agent.js should retain its own local SAFE_ARG_RE for artisan args');
+    assert.ok(src.includes("import { execCommand } from '../shell.js'"),
+      'validator-agent.js should import execCommand from shell.js');
+    assert.ok(!src.includes("import { execa }"),
+      'validator-agent.js should no longer directly import execa');
   });
 });

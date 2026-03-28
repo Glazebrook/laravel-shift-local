@@ -21,7 +21,7 @@ import { ValidatorAgent } from './agents/validator-agent.js';
 import { ReporterAgent } from './agents/reporter-agent.js';
 
 import { ShiftBaseError } from './errors.js';
-import { execFileSync } from 'node:child_process';
+import { execCommandSync } from './shell.js';
 // L1 FIX: Use shared sleep utility instead of duplicating
 import { sleep } from './utils.js';
 
@@ -519,16 +519,9 @@ export class Orchestrator {
       throw new ShiftError('SHIFT_ERR_INVALID_BINARY',
         `Invalid binary name: '${name}'. Binary names must match /^[a-zA-Z0-9._-]+$/.`);
     }
-    try {
-      // C3 FIX: Use execFileSync (no shell) instead of execSync with string interpolation.
-      // This removes shell interpretation entirely, preventing any injection even if
-      // binary names ever come from user config in the future.
-      if (process.platform === 'win32') {
-        execFileSync('where', [name], { stdio: 'ignore' });
-      } else {
-        execFileSync('which', [name], { stdio: 'ignore' });
-      }
-    } catch {
+    const cmd = process.platform === 'win32' ? 'where' : 'which';
+    const result = execCommandSync(cmd, [name], { stdio: 'ignore' });
+    if (!result.ok) {
       throw new ShiftError(
         'SHIFT_ERR_BINARY_MISSING',
         `'${name}' not found on PATH. ${explanation}`
@@ -550,10 +543,12 @@ export class Orchestrator {
           await this.logger.warn('Orchestrator', `Cannot check disk space: invalid drive letter '${driveLetter}'`);
           return;
         }
-        const output = execFileSync('powershell', [
+        const psResult = execCommandSync('powershell', [
           '-NoProfile', '-Command',
           `(Get-PSDrive ${driveLetter}).Free / 1MB`,
-        ], { encoding: 'utf8', timeout: 10_000 });
+        ], { timeout: 10_000 });
+        if (!psResult.ok) return;
+        const output = psResult.stdout;
         const availMB = parseInt(output.trim(), 10);
         if (!isNaN(availMB) && availMB < 500) {
           await this.logger.warn('Orchestrator',
@@ -562,8 +557,10 @@ export class Orchestrator {
         }
         return;
       }
-      // C3 FIX: Use execFileSync to avoid shell interpretation
-      const output = execFileSync('df', ['-m', this.projectPath], { encoding: 'utf8' });
+      // C3 FIX: Use execCommandSync to avoid shell interpretation
+      const dfResult = execCommandSync('df', ['-m', this.projectPath]);
+      if (!dfResult.ok) return;
+      const output = dfResult.stdout;
       const lines = output.trim().split('\n');
       if (lines.length < 2) return;
       const parts = lines[lines.length - 1].trim().split(/\s+/);

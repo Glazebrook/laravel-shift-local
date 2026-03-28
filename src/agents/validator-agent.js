@@ -4,7 +4,7 @@
  */
 
 import { BaseAgent } from './base-agent.js';
-import { execa } from 'execa';
+import { execCommand } from '../shell.js';
 import { join } from 'node:path';
 
 export class ValidatorAgent extends BaseAgent {
@@ -111,9 +111,12 @@ export class ValidatorAgent extends BaseAgent {
       const batch = files.slice(i, i + batchSize);
       await Promise.allSettled(batch.map(async (f) => {
         try {
-          // SEC-010 FIX: Avoid shell:true to prevent special chars in paths being interpreted by shell
-          const opts = { timeout: 10_000, shell: false };
-          await execa('php', ['-l', join(this.projectPath, f)], opts);
+          // SEC-010 FIX: Centralised via shell.js — no shell by default
+          await execCommand('php', ['-l', join(this.projectPath, f)], {
+            timeout: 10_000,
+            allowUnsafeArgs: true, // file paths may contain special chars
+            useProcessEnv: true,
+          });
         } catch (err) {
           errors.push({ file: f, error: err.stderr || err.message });
         }
@@ -125,43 +128,18 @@ export class ValidatorAgent extends BaseAgent {
   }
 
   async _artisan(args) {
-    try {
-      // HIGH-2 FIX: Validate artisan arguments against a safe pattern to prevent
-      // command injection when shell: true is used on Windows.
-      // P1-004 FIX: Removed * (glob wildcard) from allowed characters
-      const SAFE_ARG_RE = /^[a-zA-Z0-9:_\-/.=^~@ ]+$/;
-      for (const arg of args) {
-        if (!SAFE_ARG_RE.test(arg)) {
-          return { ok: false, stdout: '', stderr: `Blocked unsafe argument: ${arg}` };
-        }
-      }
-      // SEC-024 FIX: Use a minimal env allowlist instead of spreading process.env,
-      // which would leak ANTHROPIC_API_KEY and other secrets to PHP subprocesses.
-      const ENV_ALLOWLIST = [
-        'PATH', 'HOME', 'USERPROFILE', 'SYSTEMROOT', 'TEMP', 'TMP',
+    // SEC-024 FIX: Minimal env via shell.js buildMinimalEnv — never leak secrets.
+    // Additional PHP/Laravel-specific env keys are passed via envKeys.
+    return execCommand('php', ['artisan', ...args], {
+      cwd: this.projectPath,
+      timeout: this.artisanTimeout,
+      envKeys: [
         'PHP_INI_SCAN_DIR', 'COMPOSER_HOME',
         'APP_ENV', 'APP_KEY', 'DB_CONNECTION', 'DB_HOST', 'DB_PORT',
         'DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD',
-      ];
-      const minimalEnv = Object.fromEntries(
-        ENV_ALLOWLIST.filter(k => process.env[k] !== undefined).map(k => [k, process.env[k]])
-      );
-      minimalEnv.APP_ENV = 'testing';
-
-      const opts = {
-        cwd: this.projectPath,
-        // M7 FIX: Use configurable artisan timeout instead of hardcoded 60s.
-        // Large projects' `php artisan test` can take much longer.
-        timeout: this.artisanTimeout,
-        env: minimalEnv,
-      };
-      // H9 FIX: On Windows use shell: true
-      if (process.platform === 'win32') opts.shell = true;
-      const result = await execa('php', ['artisan', ...args], opts);
-      return { ok: true, stdout: result.stdout, stderr: result.stderr };
-    } catch (err) {
-      return { ok: false, stdout: err.stdout || '', stderr: err.stderr || err.message };
-    }
+      ],
+      env: { APP_ENV: 'testing' },
+    });
   }
 
   async _aiReviewErrors(validationResults, analysis) {
