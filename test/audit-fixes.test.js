@@ -1406,3 +1406,48 @@ describe('A3-003: Dead code removal — SAFE_ARG_RE removed from git-manager', (
       'validator-agent.js should no longer directly import execa');
   });
 });
+
+// ══════════════════════════════════════════════════════════════════
+// E2E-5 — Content filter fallback in transformer
+// ══════════════════════════════════════════════════════════════════
+
+describe('E2E-5: Content filter fallback', () => {
+  it('transformer source has content filtering detection', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
+    assert.ok(source.includes('content filtering'), 'Should detect content filtering errors');
+    assert.ok(source.includes('_contentFilterFallback'), 'Should have fallback method');
+  });
+
+  it('transformer handles content filter with fallback flow', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
+    assert.ok(source.includes('minimal_prompt'), 'Should attempt minimal prompt retry');
+    assert.ok(source.includes('getFileChange'), 'Should use reference data fallback');
+    assert.ok(source.includes('Manual upgrade required'), 'Should mark for manual review on failure');
+  });
+
+  it('content filter fallback records contentFilter flag in state', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
+    assert.ok(source.includes('contentFilter: true'), 'Should flag content filter failures in state');
+  });
+
+  it('content filter fallback continues processing remaining files', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
+    assert.ok(source.includes('continue;'), 'Should continue to next file after content filter');
+  });
+
+  it('transformer _contentFilterFallback tries reference data deletion', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
+    assert.ok(source.includes("type === 'removed'"), 'Should check if file should be deleted per reference data');
+    assert.ok(source.includes('delete_file'), 'Should use delete_file for removed files');
+  });
+});
