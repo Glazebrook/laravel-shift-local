@@ -87,25 +87,21 @@ Additional upgrade hints:
 ${matrixHints.map(h => `- ${h}`).join('\n')}
 ${referenceSection}${guideSection}${preProcessingSection}
 
-## Laravel 11+ Structural Migration (REQUIRED when target >= 11)
+## Laravel 11+ Structural Migration — ALREADY HANDLED
 
-When the target version is Laravel 11 or higher, the following structural changes
-are MANDATORY, not optional. Even though Laravel 11 supports the old structure for
-backwards compatibility, this tool MUST apply the new structure:
+When the target version is Laravel 11 or higher, the structural migration
+(Kernel.php removal, new bootstrap/app.php, middleware migration, provider migration,
+etc.) is handled AUTOMATICALLY by the deterministic pre-processor.
 
-1. REMOVE app/Http/Kernel.php — migrate all middleware to bootstrap/app.php withMiddleware()
-2. REMOVE app/Console/Kernel.php — migrate scheduled commands to routes/console.php
-3. REMOVE app/Exceptions/Handler.php — migrate to bootstrap/app.php withExceptions()
-4. REWRITE bootstrap/app.php — use Application::configure() with withMiddleware() and withExceptions()
-5. CREATE bootstrap/providers.php — register all custom service providers
-6. REMOVE default middleware stubs (Authenticate, EncryptCookies, TrimStrings, TrustProxies, etc.)
-7. REMOVE RouteServiceProvider — move route configuration to bootstrap/app.php
-8. REMOVE BroadcastServiceProvider, EventServiceProvider, AuthServiceProvider (if default/empty)
-9. UPDATE tests/TestCase.php — remove CreatesApplication trait
-10. DELETE tests/CreatesApplication.php
+DO NOT plan any structural migration steps. These files have already been handled:
+- app/Http/Kernel.php, app/Console/Kernel.php, app/Exceptions/Handler.php (DELETED)
+- bootstrap/app.php (REWRITTEN), bootstrap/providers.php (CREATED)
+- Default middleware stubs and provider stubs (DELETED)
+- config/cors.php (DELETED), tests/CreatesApplication.php (DELETED)
+- tests/TestCase.php (UPDATED)
 
-For EACH file being removed, use type "file_delete" or instruct the transformer
-to use delete_file, NOT write_file with a comment.
+Focus your plan on: config file updates, model changes (casts, etc.), controller
+updates, route adjustments, and any project-specific code changes.
 
 Your plan must be executable by automated agents — be specific, ordered, and safe.
 Plan ONLY the changes that require contextual understanding — do NOT redo pre-processed changes.

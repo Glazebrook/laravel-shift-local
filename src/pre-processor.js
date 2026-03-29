@@ -36,7 +36,16 @@ export async function runPreProcessing(projectRoot, fromVersion, toVersion, opti
   let totalChanges = 0;
 
   for (const transform of applicable) {
-    const result = await runSingleTransform(transform, projectRoot, { dryRun, verbose, logger });
+    let result;
+
+    if (transform.projectLevel) {
+      // Project-level transforms (e.g. l11-structural) operate on the whole project
+      result = await runProjectLevelTransform(transform, projectRoot, { dryRun, verbose, logger });
+    } else {
+      // File-level transforms operate on individual files matching a glob
+      result = await runSingleTransform(transform, projectRoot, { dryRun, verbose, logger });
+    }
+
     results.push(result);
     totalFilesModified += result.filesModified;
     totalChanges += result.changes;
@@ -115,6 +124,72 @@ async function runSingleTransform(transform, projectRoot, options = {}) {
 }
 
 /**
+ * Run a project-level transform (operates on entire project, not per-file).
+ */
+async function runProjectLevelTransform(transform, projectRoot, options = {}) {
+  const { dryRun = false, verbose = false, logger = null } = options;
+
+  const result = {
+    name: transform.name,
+    description: transform.description,
+    filesScanned: 0,
+    filesModified: 0,
+    changes: 0,
+    details: [],
+  };
+
+  // Check if the transform applies to this project
+  if (!transform.detect(projectRoot)) {
+    if (logger) {
+      await logger.info('PreProcessor', `${transform.name}: skipped (not applicable)`);
+    }
+    return result;
+  }
+
+  const runResult = transform.run(projectRoot, { dryRun, verbose });
+
+  // Aggregate results
+  const allFiles = [
+    ...runResult.filesModified.map(f => ({ file: f, desc: 'modified' })),
+    ...runResult.filesCreated.map(f => ({ file: f, desc: 'created' })),
+    ...runResult.filesDeleted.map(f => ({ file: f, desc: 'deleted' })),
+  ];
+
+  result.filesModified = allFiles.length;
+  result.changes = allFiles.length;
+  result.details = allFiles.map(f => ({
+    file: f.file,
+    description: f.desc,
+  }));
+
+  // Add extra context details
+  if (runResult.customMiddleware?.length > 0) {
+    result.details.push({
+      file: 'bootstrap/app.php',
+      description: `Migrated ${runResult.customMiddleware.length} custom middleware: ${runResult.customMiddleware.join(', ')}`,
+    });
+  }
+  if (runResult.customProviders?.length > 0) {
+    result.details.push({
+      file: 'bootstrap/providers.php',
+      description: `Migrated ${runResult.customProviders.length} custom providers: ${runResult.customProviders.join(', ')}`,
+    });
+  }
+
+  if (verbose && logger) {
+    for (const d of result.details) {
+      await logger.info('PreProcessor', `  ${transform.name}: ${d.file} — ${d.description}`);
+    }
+  }
+
+  if (logger && result.filesModified > 0) {
+    await logger.info('PreProcessor', `${transform.name}: ${result.filesModified} file(s) changed`);
+  }
+
+  return result;
+}
+
+/**
  * Generate a summary report of pre-processing for the Planner agent.
  * @param {object} preProcessingResult - Result from runPreProcessing
  * @returns {string} Human-readable summary
@@ -126,6 +201,8 @@ export function generatePreProcessingSummary(preProcessingResult) {
 
   const lines = ['The following deterministic transforms have ALREADY been applied:'];
 
+  const hasStructural = preProcessingResult.transforms.some(t => t.name === 'l11-structural' && t.filesModified > 0);
+
   for (const t of preProcessingResult.transforms) {
     if (t.filesModified === 0) continue;
     lines.push(`- ${t.name}: ${t.filesModified} file(s) — ${t.description}`);
@@ -136,6 +213,23 @@ export function generatePreProcessingSummary(preProcessingResult) {
 
   lines.push('');
   lines.push('DO NOT plan any work for changes that were already made by pre-processing.');
+
+  if (hasStructural) {
+    lines.push('');
+    lines.push('STRUCTURAL MIGRATION NOTE:');
+    lines.push('The L11 structural migration has been applied deterministically. Do NOT plan any of these:');
+    lines.push('- app/Http/Kernel.php (DELETED — middleware migrated to bootstrap/app.php)');
+    lines.push('- app/Console/Kernel.php (DELETED)');
+    lines.push('- app/Exceptions/Handler.php (DELETED — exceptions migrated to bootstrap/app.php)');
+    lines.push('- bootstrap/app.php (REWRITTEN to L11 Application::configure() format)');
+    lines.push('- bootstrap/providers.php (CREATED with custom providers)');
+    lines.push('- Default middleware stubs (DELETED)');
+    lines.push('- Default provider stubs (DELETED)');
+    lines.push('- config/cors.php (DELETED)');
+    lines.push('- tests/CreatesApplication.php (DELETED)');
+    lines.push('- tests/TestCase.php (UPDATED — CreatesApplication removed)');
+    lines.push('Focus only on: config files, model changes, controller updates, route adjustments, and project-specific code.');
+  }
 
   return lines.join('\n');
 }

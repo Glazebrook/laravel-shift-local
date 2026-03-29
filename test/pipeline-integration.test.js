@@ -56,7 +56,7 @@ describe('Pipeline Integration — Module Imports', () => {
     const mod = await import('../src/transforms/index.js');
     assert.equal(typeof mod.getApplicableTransforms, 'function');
     assert.ok(Array.isArray(mod.transforms));
-    assert.equal(mod.transforms.length, 12);
+    assert.equal(mod.transforms.length, 13);
   });
 });
 
@@ -157,13 +157,11 @@ describe('L11 Structural Migration — Agent Prompts', () => {
     const { join } = await import('node:path');
     const source = readFileSync(join(import.meta.dirname, '..', 'src', 'agents', 'planner-agent.js'), 'utf-8');
 
-    assert.ok(source.includes('Laravel 11+ Structural Migration (REQUIRED'));
-    assert.ok(source.includes('REMOVE app/Http/Kernel.php'));
-    assert.ok(source.includes('REMOVE app/Console/Kernel.php'));
-    assert.ok(source.includes('REMOVE app/Exceptions/Handler.php'));
-    assert.ok(source.includes('REWRITE bootstrap/app.php'));
-    assert.ok(source.includes('CREATE bootstrap/providers.php'));
-    assert.ok(source.includes('delete_file'));
+    assert.ok(source.includes('Laravel 11+ Structural Migration'));
+    assert.ok(source.includes('ALREADY HANDLED'));
+    assert.ok(source.includes('app/Http/Kernel.php'));
+    assert.ok(source.includes('bootstrap/app.php'));
+    assert.ok(source.includes('bootstrap/providers.php'));
   });
 
   it('transformer system prompt includes L11 structural migration guidance', async () => {

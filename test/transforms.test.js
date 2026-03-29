@@ -22,6 +22,19 @@ import downMigration from '../src/transforms/down-migration.js';
 import laravelCarbon from '../src/transforms/laravel-carbon.js';
 import { getApplicableTransforms, transforms } from '../src/transforms/index.js';
 import { runPreProcessing, generatePreProcessingSummary } from '../src/pre-processor.js';
+import l11Structural, {
+  extractCustomMiddleware,
+  extractCustomMiddlewareGroups,
+  extractCustomMiddlewareAliases,
+  extractCustomExceptionHandling,
+  extractCustomProviders,
+  generateBootstrapApp,
+  addApiRouting,
+  generateProvidersFile,
+  isDefaultMiddlewareStub,
+  isDefaultProviderStub,
+} from '../src/transforms/l11-structural.js';
+import { existsSync } from 'node:fs';
 
 // ─── Anonymous Migrations ────────────────────────────────
 
@@ -415,17 +428,23 @@ describe('Transform: laravel-carbon', () => {
 // ─── Transform Registry ─────────────────────────────────
 
 describe('Transform Registry', () => {
-  it('has 12 transforms registered', () => {
-    assert.equal(transforms.length, 12);
+  it('has 13 transforms registered', () => {
+    assert.equal(transforms.length, 13);
   });
 
   it('each transform has required interface', () => {
     for (const t of transforms) {
       assert.ok(t.name, `Missing name on ${JSON.stringify(t)}`);
       assert.ok(t.description, `Missing description on ${t.name}`);
-      assert.ok(t.glob, `Missing glob on ${t.name}`);
-      assert.equal(typeof t.detect, 'function', `Missing detect() on ${t.name}`);
-      assert.equal(typeof t.transform, 'function', `Missing transform() on ${t.name}`);
+      if (t.projectLevel) {
+        // Project-level transforms have detect(projectRoot) and run(projectRoot)
+        assert.equal(typeof t.detect, 'function', `Missing detect() on ${t.name}`);
+        assert.equal(typeof t.run, 'function', `Missing run() on ${t.name}`);
+      } else {
+        assert.ok(t.glob, `Missing glob on ${t.name}`);
+        assert.equal(typeof t.detect, 'function', `Missing detect() on ${t.name}`);
+        assert.equal(typeof t.transform, 'function', `Missing transform() on ${t.name}`);
+      }
     }
   });
 
@@ -459,6 +478,802 @@ describe('Transform Registry', () => {
     const from9 = getApplicableTransforms('9', '10');
     const names9 = from9.map(t => t.name);
     assert.ok(names9.includes('faker-methods'));
+  });
+
+  it('filters by targetMinVersion (l11-structural requires target >= 11)', () => {
+    const to10 = getApplicableTransforms('10', '10');
+    const names10 = to10.map(t => t.name);
+    assert.ok(!names10.includes('l11-structural'));
+
+    const to11 = getApplicableTransforms('10', '11');
+    const names11 = to11.map(t => t.name);
+    assert.ok(names11.includes('l11-structural'));
+
+    const to13 = getApplicableTransforms('9', '13');
+    const names13 = to13.map(t => t.name);
+    assert.ok(names13.includes('l11-structural'));
+  });
+});
+
+// ─── L11 Structural Migration ──────────────────────────
+
+describe('Transform: l11-structural', () => {
+  // ── Detection ──
+
+  describe('detection', () => {
+    const tmpDir = join(import.meta.dirname, '.tmp-l11-detect');
+
+    after(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+    it('detects project with Kernel.php as needing transform', () => {
+      mkdirSync(join(tmpDir, 'app', 'Http'), { recursive: true });
+      writeFileSync(join(tmpDir, 'app', 'Http', 'Kernel.php'), '<?php\nclass Kernel {}');
+      assert.ok(l11Structural.detect(tmpDir));
+    });
+
+    it('skips project without Kernel.php (already L11)', () => {
+      const tmpDir2 = join(import.meta.dirname, '.tmp-l11-detect2');
+      mkdirSync(tmpDir2, { recursive: true });
+      assert.ok(!l11Structural.detect(tmpDir2));
+      rmSync(tmpDir2, { recursive: true, force: true });
+    });
+  });
+
+  // ── Middleware extraction ──
+
+  describe('extractCustomMiddleware', () => {
+    it('returns empty for default kernel', () => {
+      const kernel = `<?php
+class Kernel extends HttpKernel {
+    protected $middleware = [
+        \\App\\Http\\Middleware\\TrustProxies::class,
+        \\Illuminate\\Http\\Middleware\\HandleCors::class,
+        \\App\\Http\\Middleware\\PreventRequestsDuringMaintenance::class,
+        \\Illuminate\\Foundation\\Http\\Middleware\\ValidatePostSize::class,
+        \\App\\Http\\Middleware\\TrimStrings::class,
+        \\Illuminate\\Foundation\\Http\\Middleware\\ConvertEmptyStringsToNull::class,
+    ];
+}`;
+      assert.deepEqual(extractCustomMiddleware(kernel), []);
+    });
+
+    it('extracts one custom global middleware', () => {
+      const kernel = `<?php
+class Kernel extends HttpKernel {
+    protected $middleware = [
+        \\App\\Http\\Middleware\\TrustProxies::class,
+        \\Illuminate\\Http\\Middleware\\HandleCors::class,
+        \\App\\Http\\Middleware\\PreventRequestsDuringMaintenance::class,
+        \\Illuminate\\Foundation\\Http\\Middleware\\ValidatePostSize::class,
+        \\App\\Http\\Middleware\\TrimStrings::class,
+        \\Illuminate\\Foundation\\Http\\Middleware\\ConvertEmptyStringsToNull::class,
+        \\App\\Http\\Middleware\\TrackVisitor::class,
+    ];
+}`;
+      const result = extractCustomMiddleware(kernel);
+      assert.deepEqual(result, ['App\\Http\\Middleware\\TrackVisitor']);
+    });
+
+    it('extracts multiple custom middleware', () => {
+      const kernel = `<?php
+class Kernel extends HttpKernel {
+    protected $middleware = [
+        \\App\\Http\\Middleware\\TrustProxies::class,
+        \\App\\Http\\Middleware\\CustomCors::class,
+        \\App\\Http\\Middleware\\LogRequests::class,
+    ];
+}`;
+      const result = extractCustomMiddleware(kernel);
+      assert.equal(result.length, 2);
+      assert.ok(result.includes('App\\Http\\Middleware\\CustomCors'));
+      assert.ok(result.includes('App\\Http\\Middleware\\LogRequests'));
+    });
+  });
+
+  describe('extractCustomMiddlewareAliases', () => {
+    it('returns empty for default aliases', () => {
+      const kernel = `<?php
+class Kernel extends HttpKernel {
+    protected $middlewareAliases = [
+        'auth' => \\Illuminate\\Auth\\Middleware\\Authenticate::class,
+        'throttle' => \\Illuminate\\Routing\\Middleware\\ThrottleRequests::class,
+    ];
+}`;
+      assert.deepEqual(extractCustomMiddlewareAliases(kernel), {});
+    });
+
+    it('extracts custom aliases', () => {
+      const kernel = `<?php
+class Kernel extends HttpKernel {
+    protected $middlewareAliases = [
+        'auth' => \\Illuminate\\Auth\\Middleware\\Authenticate::class,
+        'admin' => \\App\\Http\\Middleware\\AdminOnly::class,
+        'locale' => \\App\\Http\\Middleware\\SetLocale::class,
+    ];
+}`;
+      const result = extractCustomMiddlewareAliases(kernel);
+      assert.equal(result['admin'], 'App\\Http\\Middleware\\AdminOnly');
+      assert.equal(result['locale'], 'App\\Http\\Middleware\\SetLocale');
+      assert.ok(!('auth' in result));
+    });
+
+    it('handles $routeMiddleware (older Laravel naming)', () => {
+      const kernel = `<?php
+class Kernel extends HttpKernel {
+    protected $routeMiddleware = [
+        'auth' => \\Illuminate\\Auth\\Middleware\\Authenticate::class,
+        'role' => \\App\\Http\\Middleware\\CheckRole::class,
+    ];
+}`;
+      const result = extractCustomMiddlewareAliases(kernel);
+      assert.equal(result['role'], 'App\\Http\\Middleware\\CheckRole');
+    });
+  });
+
+  describe('extractCustomMiddlewareGroups', () => {
+    it('returns empty for default groups', () => {
+      const kernel = `<?php
+class Kernel extends HttpKernel {
+    protected $middlewareGroups = [
+        'web' => [
+            \\App\\Http\\Middleware\\EncryptCookies::class,
+            \\App\\Http\\Middleware\\VerifyCsrfToken::class,
+        ],
+    ];
+}`;
+      assert.deepEqual(extractCustomMiddlewareGroups(kernel), {});
+    });
+
+    it('extracts custom middleware in groups', () => {
+      const kernel = `<?php
+class Kernel extends HttpKernel {
+    protected $middlewareGroups = [
+        'web' => [
+            \\App\\Http\\Middleware\\EncryptCookies::class,
+            \\App\\Http\\Middleware\\VerifyCsrfToken::class,
+            \\App\\Http\\Middleware\\TrackSession::class,
+        ],
+    ];
+}`;
+      const result = extractCustomMiddlewareGroups(kernel);
+      assert.ok(result.custom);
+      assert.ok(result.custom.includes('App\\Http\\Middleware\\TrackSession'));
+    });
+  });
+
+  // ── Exception handling extraction ──
+
+  describe('extractCustomExceptionHandling', () => {
+    it('returns empty for default handler', () => {
+      const handler = `<?php
+class Handler extends ExceptionHandler {
+    public function register(): void
+    {
+        //
+    }
+}`;
+      assert.equal(extractCustomExceptionHandling(handler), '');
+    });
+
+    it('returns empty for handler with only comments', () => {
+      const handler = `<?php
+class Handler extends ExceptionHandler {
+    public function register(): void
+    {
+        // Default handler
+        /* nothing here */
+    }
+}`;
+      assert.equal(extractCustomExceptionHandling(handler), '');
+    });
+
+    it('extracts custom exception handling code', () => {
+      const handler = `<?php
+class Handler extends ExceptionHandler {
+    public function register(): void
+    {
+        $this->reportable(function (Throwable $e) {
+            Sentry::captureException($e);
+        });
+    }
+}`;
+      const result = extractCustomExceptionHandling(handler);
+      assert.ok(result.includes('reportable'));
+      assert.ok(result.includes('Sentry'));
+    });
+  });
+
+  // ── Provider extraction ──
+
+  describe('extractCustomProviders', () => {
+    it('returns empty for default config/app.php', () => {
+      const config = `<?php
+return [
+    'providers' => [
+        Illuminate\\Auth\\AuthServiceProvider::class,
+        App\\Providers\\AppServiceProvider::class,
+        App\\Providers\\AuthServiceProvider::class,
+        App\\Providers\\EventServiceProvider::class,
+        App\\Providers\\RouteServiceProvider::class,
+    ],
+];`;
+      assert.deepEqual(extractCustomProviders(config), []);
+    });
+
+    it('extracts custom providers', () => {
+      const config = `<?php
+return [
+    'providers' => [
+        App\\Providers\\AppServiceProvider::class,
+        App\\Providers\\AuthServiceProvider::class,
+        App\\Providers\\TelescopeServiceProvider::class,
+        App\\Providers\\HorizonServiceProvider::class,
+    ],
+];`;
+      const result = extractCustomProviders(config);
+      assert.ok(result.includes('App\\Providers\\TelescopeServiceProvider'));
+      assert.ok(result.includes('App\\Providers\\HorizonServiceProvider'));
+      assert.ok(!result.includes('App\\Providers\\AppServiceProvider'));
+    });
+
+    it('skips framework providers', () => {
+      const config = `<?php
+return [
+    'providers' => [
+        Illuminate\\Auth\\AuthServiceProvider::class,
+        Laravel\\Sanctum\\SanctumServiceProvider::class,
+        App\\Providers\\AppServiceProvider::class,
+        App\\Providers\\CustomProvider::class,
+    ],
+];`;
+      const result = extractCustomProviders(config);
+      assert.deepEqual(result, ['App\\Providers\\CustomProvider']);
+    });
+  });
+
+  // ── File generation ──
+
+  describe('generateBootstrapApp', () => {
+    it('generates correct format with no custom code', () => {
+      const result = generateBootstrapApp({
+        customMiddleware: [],
+        customMiddlewareGroups: {},
+        customMiddlewareAliases: {},
+        customExceptionCode: '',
+      });
+      assert.ok(result.includes('Application::configure(basePath: dirname(__DIR__))'));
+      assert.ok(result.includes('->withRouting('));
+      assert.ok(result.includes('->withMiddleware('));
+      assert.ok(result.includes('->withExceptions('));
+      assert.ok(result.includes('->create()'));
+      assert.ok(result.includes("web: __DIR__.'/../routes/web.php'"));
+      assert.ok(result.includes("commands: __DIR__.'/../routes/console.php'"));
+    });
+
+    it('includes custom middleware in withMiddleware()', () => {
+      const result = generateBootstrapApp({
+        customMiddleware: ['App\\Http\\Middleware\\TrackVisitor'],
+        customMiddlewareGroups: {},
+        customMiddlewareAliases: {},
+        customExceptionCode: '',
+      });
+      assert.ok(result.includes('$middleware->append(\\App\\Http\\Middleware\\TrackVisitor::class)'));
+    });
+
+    it('includes custom aliases', () => {
+      const result = generateBootstrapApp({
+        customMiddleware: [],
+        customMiddlewareGroups: {},
+        customMiddlewareAliases: { 'admin': 'App\\Http\\Middleware\\AdminOnly' },
+        customExceptionCode: '',
+      });
+      assert.ok(result.includes("$middleware->alias(['admin' => \\App\\Http\\Middleware\\AdminOnly::class])"));
+    });
+
+    it('includes custom exception code', () => {
+      const result = generateBootstrapApp({
+        customMiddleware: [],
+        customMiddlewareGroups: {},
+        customMiddlewareAliases: {},
+        customExceptionCode: '$this->reportable(function (Throwable $e) { });',
+      });
+      assert.ok(result.includes('reportable'));
+    });
+
+    it('does NOT include api routing by default', () => {
+      const result = generateBootstrapApp({
+        customMiddleware: [],
+        customMiddlewareGroups: {},
+        customMiddlewareAliases: {},
+        customExceptionCode: '',
+      });
+      assert.ok(!result.includes('api.php'));
+    });
+  });
+
+  describe('addApiRouting', () => {
+    it('adds api routing to bootstrap content', () => {
+      const content = generateBootstrapApp({
+        customMiddleware: [],
+        customMiddlewareGroups: {},
+        customMiddlewareAliases: {},
+        customExceptionCode: '',
+      });
+      const result = addApiRouting(content);
+      assert.ok(result.includes("api: __DIR__.'/../routes/api.php'"));
+      assert.ok(result.includes("commands: __DIR__.'/../routes/console.php'"));
+    });
+  });
+
+  describe('generateProvidersFile', () => {
+    it('includes AppServiceProvider', () => {
+      const result = generateProvidersFile(['App\\Providers\\AppServiceProvider']);
+      assert.ok(result.includes('App\\Providers\\AppServiceProvider::class'));
+      assert.ok(result.includes('return ['));
+    });
+
+    it('includes custom providers', () => {
+      const result = generateProvidersFile([
+        'App\\Providers\\AppServiceProvider',
+        'App\\Providers\\TelescopeServiceProvider',
+      ]);
+      assert.ok(result.includes('App\\Providers\\AppServiceProvider::class'));
+      assert.ok(result.includes('App\\Providers\\TelescopeServiceProvider::class'));
+    });
+  });
+
+  // ── Stub detection ──
+
+  describe('isDefaultMiddlewareStub', () => {
+    it('detects default empty stub', () => {
+      const stub = `<?php
+namespace App\\Http\\Middleware;
+class TrimStrings extends Middleware {
+    protected $except = [
+        //
+    ];
+}`;
+      assert.ok(isDefaultMiddlewareStub(stub));
+    });
+
+    it('detects customised stub (non-empty $except)', () => {
+      const stub = `<?php
+namespace App\\Http\\Middleware;
+class VerifyCsrfToken extends Middleware {
+    protected $except = [
+        'api/*',
+        'webhooks/*',
+    ];
+}`;
+      assert.ok(!isDefaultMiddlewareStub(stub));
+    });
+  });
+
+  describe('isDefaultProviderStub', () => {
+    it('detects default empty provider', () => {
+      const provider = `<?php
+namespace App\\Providers;
+class EventServiceProvider extends ServiceProvider {
+    public function register(): void
+    {
+        //
+    }
+    public function boot(): void
+    {
+        //
+    }
+}`;
+      assert.ok(isDefaultProviderStub(provider));
+    });
+
+    it('detects customised provider', () => {
+      const provider = `<?php
+namespace App\\Providers;
+class EventServiceProvider extends ServiceProvider {
+    public function boot(): void
+    {
+        Event::listen(OrderShipped::class, SendShipmentNotification::class);
+    }
+}`;
+      assert.ok(!isDefaultProviderStub(provider));
+    });
+  });
+
+  // ── Full run integration ──
+
+  describe('full run', () => {
+    const tmpDir = join(import.meta.dirname, '.tmp-l11-run');
+
+    function setupProject(overrides = {}) {
+      rmSync(tmpDir, { recursive: true, force: true });
+
+      // Create directory structure
+      mkdirSync(join(tmpDir, 'app', 'Http', 'Middleware'), { recursive: true });
+      mkdirSync(join(tmpDir, 'app', 'Console'), { recursive: true });
+      mkdirSync(join(tmpDir, 'app', 'Exceptions'), { recursive: true });
+      mkdirSync(join(tmpDir, 'app', 'Providers'), { recursive: true });
+      mkdirSync(join(tmpDir, 'bootstrap'), { recursive: true });
+      mkdirSync(join(tmpDir, 'config'), { recursive: true });
+      mkdirSync(join(tmpDir, 'routes'), { recursive: true });
+      mkdirSync(join(tmpDir, 'tests'), { recursive: true });
+      mkdirSync(join(tmpDir, '.shift', 'backups'), { recursive: true });
+
+      // Write Kernel.php
+      writeFileSync(join(tmpDir, 'app', 'Http', 'Kernel.php'), overrides.kernel || `<?php
+namespace App\\Http;
+use Illuminate\\Foundation\\Http\\Kernel as HttpKernel;
+class Kernel extends HttpKernel {
+    protected $middleware = [
+        \\App\\Http\\Middleware\\TrustProxies::class,
+        \\Illuminate\\Http\\Middleware\\HandleCors::class,
+        \\App\\Http\\Middleware\\PreventRequestsDuringMaintenance::class,
+        \\Illuminate\\Foundation\\Http\\Middleware\\ValidatePostSize::class,
+        \\App\\Http\\Middleware\\TrimStrings::class,
+        \\Illuminate\\Foundation\\Http\\Middleware\\ConvertEmptyStringsToNull::class,
+    ];
+    protected $middlewareGroups = [
+        'web' => [
+            \\App\\Http\\Middleware\\EncryptCookies::class,
+            \\App\\Http\\Middleware\\VerifyCsrfToken::class,
+        ],
+    ];
+    protected $middlewareAliases = [
+        'auth' => \\Illuminate\\Auth\\Middleware\\Authenticate::class,
+        'throttle' => \\Illuminate\\Routing\\Middleware\\ThrottleRequests::class,
+    ];
+}`);
+
+      // Write Console/Kernel.php
+      writeFileSync(join(tmpDir, 'app', 'Console', 'Kernel.php'), `<?php
+namespace App\\Console;
+class Kernel extends ConsoleKernel {
+    protected function schedule(Schedule $schedule): void {}
+}`);
+
+      // Write Handler.php
+      writeFileSync(join(tmpDir, 'app', 'Exceptions', 'Handler.php'), overrides.handler || `<?php
+namespace App\\Exceptions;
+class Handler extends ExceptionHandler {
+    public function register(): void
+    {
+        //
+    }
+}`);
+
+      // Write bootstrap/app.php (old format)
+      writeFileSync(join(tmpDir, 'bootstrap', 'app.php'), `<?php
+$app = new Illuminate\\Foundation\\Application(
+    $_ENV['APP_BASE_PATH'] ?? dirname(__DIR__)
+);
+$app->singleton('Kernel', App\\Http\\Kernel::class);
+return $app;`);
+
+      // Write config/app.php
+      writeFileSync(join(tmpDir, 'config', 'app.php'), overrides.configApp || `<?php
+return [
+    'providers' => [
+        App\\Providers\\AppServiceProvider::class,
+        App\\Providers\\AuthServiceProvider::class,
+        App\\Providers\\RouteServiceProvider::class,
+    ],
+];`);
+
+      // Write config/cors.php
+      writeFileSync(join(tmpDir, 'config', 'cors.php'), `<?php
+return ['paths' => ['api/*']];`);
+
+      // Write default middleware stubs
+      writeFileSync(join(tmpDir, 'app', 'Http', 'Middleware', 'TrimStrings.php'), `<?php
+namespace App\\Http\\Middleware;
+class TrimStrings extends Middleware {
+    protected $except = [
+        //
+    ];
+}`);
+
+      writeFileSync(join(tmpDir, 'app', 'Http', 'Middleware', 'TrustProxies.php'), `<?php
+namespace App\\Http\\Middleware;
+class TrustProxies extends Middleware {
+}`);
+
+      // Write default providers
+      writeFileSync(join(tmpDir, 'app', 'Providers', 'AppServiceProvider.php'), `<?php
+namespace App\\Providers;
+class AppServiceProvider extends ServiceProvider {
+    public function register(): void
+    {
+        //
+    }
+    public function boot(): void
+    {
+        //
+    }
+}`);
+
+      writeFileSync(join(tmpDir, 'app', 'Providers', 'AuthServiceProvider.php'), `<?php
+namespace App\\Providers;
+class AuthServiceProvider extends ServiceProvider {
+    public function register(): void
+    {
+        //
+    }
+    public function boot(): void
+    {
+        //
+    }
+}`);
+
+      writeFileSync(join(tmpDir, 'app', 'Providers', 'RouteServiceProvider.php'), `<?php
+namespace App\\Providers;
+class RouteServiceProvider extends ServiceProvider {
+    public function register(): void
+    {
+        //
+    }
+    public function boot(): void
+    {
+        //
+    }
+}`);
+
+      // Write routes/web.php
+      writeFileSync(join(tmpDir, 'routes', 'web.php'), `<?php
+Route::get('/', function () { return view('welcome'); });`);
+
+      // Write tests/TestCase.php
+      writeFileSync(join(tmpDir, 'tests', 'TestCase.php'), `<?php
+namespace Tests;
+use Tests\\CreatesApplication;
+use Illuminate\\Foundation\\Testing\\TestCase as BaseTestCase;
+abstract class TestCase extends BaseTestCase
+{
+    use CreatesApplication;
+}`);
+
+      // Write tests/CreatesApplication.php
+      writeFileSync(join(tmpDir, 'tests', 'CreatesApplication.php'), `<?php
+namespace Tests;
+trait CreatesApplication {
+    public function createApplication() {
+        return require __DIR__.'/../bootstrap/app.php';
+    }
+}`);
+    }
+
+    after(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+    it('deletes Kernel.php with backup', () => {
+      setupProject();
+      const result = l11Structural.run(tmpDir);
+      assert.ok(result.filesDeleted.includes('app/Http/Kernel.php'));
+      assert.ok(!existsSync(join(tmpDir, 'app', 'Http', 'Kernel.php')));
+      // Backup exists
+      assert.ok(existsSync(join(tmpDir, '.shift', 'backups', 'app', 'Http', 'Kernel.php')));
+    });
+
+    it('deletes Console/Kernel.php', () => {
+      setupProject();
+      const result = l11Structural.run(tmpDir);
+      assert.ok(result.filesDeleted.includes('app/Console/Kernel.php'));
+      assert.ok(!existsSync(join(tmpDir, 'app', 'Console', 'Kernel.php')));
+    });
+
+    it('deletes Handler.php', () => {
+      setupProject();
+      const result = l11Structural.run(tmpDir);
+      assert.ok(result.filesDeleted.includes('app/Exceptions/Handler.php'));
+    });
+
+    it('deletes config/cors.php', () => {
+      setupProject();
+      const result = l11Structural.run(tmpDir);
+      assert.ok(result.filesDeleted.includes('config/cors.php'));
+    });
+
+    it('deletes tests/CreatesApplication.php', () => {
+      setupProject();
+      const result = l11Structural.run(tmpDir);
+      assert.ok(result.filesDeleted.includes('tests/CreatesApplication.php'));
+    });
+
+    it('deletes default middleware stubs', () => {
+      setupProject();
+      const result = l11Structural.run(tmpDir);
+      assert.ok(result.filesDeleted.includes('app/Http/Middleware/TrimStrings.php'));
+      assert.ok(result.filesDeleted.includes('app/Http/Middleware/TrustProxies.php'));
+    });
+
+    it('deletes default provider stubs', () => {
+      setupProject();
+      const result = l11Structural.run(tmpDir);
+      assert.ok(result.filesDeleted.includes('app/Providers/AuthServiceProvider.php'));
+      assert.ok(result.filesDeleted.includes('app/Providers/RouteServiceProvider.php'));
+    });
+
+    it('preserves custom middleware stubs', () => {
+      setupProject();
+      writeFileSync(join(tmpDir, 'app', 'Http', 'Middleware', 'VerifyCsrfToken.php'), `<?php
+namespace App\\Http\\Middleware;
+class VerifyCsrfToken extends Middleware {
+    protected $except = [
+        'api/webhooks/*',
+        'stripe/*',
+    ];
+}`);
+      const result = l11Structural.run(tmpDir);
+      assert.ok(!result.filesDeleted.includes('app/Http/Middleware/VerifyCsrfToken.php'));
+      assert.ok(existsSync(join(tmpDir, 'app', 'Http', 'Middleware', 'VerifyCsrfToken.php')));
+    });
+
+    it('preserves custom provider stubs (has non-empty methods)', () => {
+      setupProject();
+      writeFileSync(join(tmpDir, 'app', 'Providers', 'EventServiceProvider.php'), `<?php
+namespace App\\Providers;
+class EventServiceProvider extends ServiceProvider {
+    public function boot(): void
+    {
+        Event::listen(OrderShipped::class, SendNotification::class);
+    }
+}`);
+      const result = l11Structural.run(tmpDir);
+      assert.ok(!result.filesDeleted.includes('app/Providers/EventServiceProvider.php'));
+    });
+
+    it('rewrites bootstrap/app.php to L11 format', () => {
+      setupProject();
+      l11Structural.run(tmpDir);
+      const content = readFileSync(join(tmpDir, 'bootstrap', 'app.php'), 'utf-8');
+      assert.ok(content.includes('Application::configure(basePath: dirname(__DIR__))'));
+      assert.ok(content.includes('->withMiddleware('));
+      assert.ok(content.includes('->withExceptions('));
+      assert.ok(content.includes('->create()'));
+    });
+
+    it('creates bootstrap/providers.php', () => {
+      setupProject();
+      const result = l11Structural.run(tmpDir);
+      assert.ok(result.filesCreated.includes('bootstrap/providers.php'));
+      const content = readFileSync(join(tmpDir, 'bootstrap', 'providers.php'), 'utf-8');
+      assert.ok(content.includes('App\\Providers\\AppServiceProvider::class'));
+    });
+
+    it('includes custom providers in bootstrap/providers.php', () => {
+      setupProject({
+        configApp: `<?php
+return [
+    'providers' => [
+        App\\Providers\\AppServiceProvider::class,
+        App\\Providers\\AuthServiceProvider::class,
+        App\\Providers\\TelescopeServiceProvider::class,
+    ],
+];`,
+      });
+      const result = l11Structural.run(tmpDir);
+      assert.ok(result.customProviders.includes('App\\Providers\\TelescopeServiceProvider'));
+      const content = readFileSync(join(tmpDir, 'bootstrap', 'providers.php'), 'utf-8');
+      assert.ok(content.includes('App\\Providers\\TelescopeServiceProvider::class'));
+    });
+
+    it('includes api routing when routes/api.php exists', () => {
+      setupProject();
+      writeFileSync(join(tmpDir, 'routes', 'api.php'), '<?php\n// api routes');
+      l11Structural.run(tmpDir);
+      const content = readFileSync(join(tmpDir, 'bootstrap', 'app.php'), 'utf-8');
+      assert.ok(content.includes("api: __DIR__.'/../routes/api.php'"));
+    });
+
+    it('does NOT include api routing when no routes/api.php', () => {
+      setupProject();
+      l11Structural.run(tmpDir);
+      const content = readFileSync(join(tmpDir, 'bootstrap', 'app.php'), 'utf-8');
+      assert.ok(!content.includes('api.php'));
+    });
+
+    it('migrates custom middleware to bootstrap/app.php', () => {
+      setupProject({
+        kernel: `<?php
+namespace App\\Http;
+class Kernel extends HttpKernel {
+    protected $middleware = [
+        \\App\\Http\\Middleware\\TrustProxies::class,
+        \\Illuminate\\Http\\Middleware\\HandleCors::class,
+        \\App\\Http\\Middleware\\PreventRequestsDuringMaintenance::class,
+        \\Illuminate\\Foundation\\Http\\Middleware\\ValidatePostSize::class,
+        \\App\\Http\\Middleware\\TrimStrings::class,
+        \\Illuminate\\Foundation\\Http\\Middleware\\ConvertEmptyStringsToNull::class,
+        \\App\\Http\\Middleware\\TrackVisitor::class,
+    ];
+    protected $middlewareGroups = [
+        'web' => [
+            \\App\\Http\\Middleware\\EncryptCookies::class,
+        ],
+    ];
+    protected $middlewareAliases = [
+        'auth' => \\Illuminate\\Auth\\Middleware\\Authenticate::class,
+    ];
+}`,
+      });
+      const result = l11Structural.run(tmpDir);
+      assert.deepEqual(result.customMiddleware, ['App\\Http\\Middleware\\TrackVisitor']);
+      const content = readFileSync(join(tmpDir, 'bootstrap', 'app.php'), 'utf-8');
+      assert.ok(content.includes('$middleware->append(\\App\\Http\\Middleware\\TrackVisitor::class)'));
+    });
+
+    it('migrates custom exception handling to bootstrap/app.php', () => {
+      setupProject({
+        handler: `<?php
+namespace App\\Exceptions;
+class Handler extends ExceptionHandler {
+    public function register(): void
+    {
+        $this->reportable(function (Throwable $e) {
+            Sentry::captureException($e);
+        });
+    }
+}`,
+      });
+      const result = l11Structural.run(tmpDir);
+      assert.ok(result.customExceptionHandling);
+      const content = readFileSync(join(tmpDir, 'bootstrap', 'app.php'), 'utf-8');
+      assert.ok(content.includes('reportable'));
+    });
+
+    it('updates tests/TestCase.php (removes CreatesApplication)', () => {
+      setupProject();
+      l11Structural.run(tmpDir);
+      const content = readFileSync(join(tmpDir, 'tests', 'TestCase.php'), 'utf-8');
+      assert.ok(!content.includes('use CreatesApplication'));
+      assert.ok(!content.includes('use Tests\\CreatesApplication'));
+      assert.ok(content.includes('class TestCase'));
+    });
+
+    it('skips gracefully when config/app.php is missing', () => {
+      setupProject();
+      rmSync(join(tmpDir, 'config', 'app.php'));
+      const result = l11Structural.run(tmpDir);
+      assert.deepEqual(result.customProviders, []);
+      // Still creates providers.php with at least AppServiceProvider
+      const content = readFileSync(join(tmpDir, 'bootstrap', 'providers.php'), 'utf-8');
+      assert.ok(content.includes('AppServiceProvider'));
+    });
+
+    it('skips gracefully when Handler.php is missing', () => {
+      setupProject();
+      rmSync(join(tmpDir, 'app', 'Exceptions', 'Handler.php'));
+      const result = l11Structural.run(tmpDir);
+      assert.ok(!result.customExceptionHandling);
+    });
+
+    it('skips gracefully when tests/TestCase.php is missing', () => {
+      setupProject();
+      rmSync(join(tmpDir, 'tests', 'TestCase.php'));
+      // Should not throw
+      const result = l11Structural.run(tmpDir);
+      assert.ok(!result.filesModified.includes('tests/TestCase.php'));
+    });
+
+    it('dry run does not modify files', () => {
+      setupProject();
+      const result = l11Structural.run(tmpDir, { dryRun: true });
+      assert.deepEqual(result.filesDeleted, []);
+      assert.deepEqual(result.filesCreated, []);
+      assert.deepEqual(result.filesModified, []);
+      // But still extracts info
+      assert.ok(Array.isArray(result.customMiddleware));
+      // Original files should still exist
+      assert.ok(existsSync(join(tmpDir, 'app', 'Http', 'Kernel.php')));
+    });
+
+    it('cleans up empty directories', () => {
+      setupProject();
+      // Remove all middleware files except the stubs that will be deleted
+      l11Structural.run(tmpDir);
+      // app/Http/Middleware should be gone if all stubs were deleted
+      // (unless custom stubs remain)
+      assert.ok(!existsSync(join(tmpDir, 'app', 'Http', 'Middleware')));
+      // app/Exceptions should be gone
+      assert.ok(!existsSync(join(tmpDir, 'app', 'Exceptions')));
+    });
   });
 });
 
