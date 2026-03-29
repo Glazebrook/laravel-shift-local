@@ -17,8 +17,9 @@ export class PlannerAgent extends BaseAgent {
   /**
    * H6 FIX: Now accepts completedFiles parameter so the planner knows
    * which files have already been transformed on resume.
+   * Enhanced: Accepts referenceContext with manifests, upgrade guide, and pre-processing report.
    */
-  async plan(analysis, fromVersion, toVersion, completedFiles = []) {
+  async plan(analysis, fromVersion, toVersion, completedFiles = [], referenceContext = {}) {
     await this.logger.phase('PHASE 2: Planning Upgrade');
 
     const matrix = getCombinedMatrix(
@@ -48,17 +49,46 @@ export class PlannerAgent extends BaseAgent {
         `\n\nYour plan should account for these already-applied changes. Do not generate conflicting steps.`;
     }
 
+    // Build reference data context sections
+    let referenceSection = '';
+    if (referenceContext.manifest) {
+      const m = referenceContext.manifest;
+      const added = m.skeleton?.filesAdded?.map(f => f.path).join(', ') || 'none';
+      const removed = m.skeleton?.filesRemoved?.map(f => f.path).join(', ') || 'none';
+      const modified = m.skeleton?.filesModified?.map(f => f.path).join(', ') || 'none';
+      referenceSection = `\n\nREFERENCE DIFF MANIFEST (exact skeleton changes from Laravel Shift reference repos):
+Files added: ${added}
+Files removed: ${removed}
+Files modified: ${modified}
+Composer changes: ${JSON.stringify(referenceContext.composerChanges || {}, null, 2)}
+
+Use this as ground truth for what changed between skeleton versions.`;
+    }
+
+    let guideSection = '';
+    if (referenceContext.upgradeGuide) {
+      guideSection = `\n\nOFFICIAL UPGRADE GUIDE:\n${referenceContext.upgradeGuide}`;
+    }
+
+    let preProcessingSection = '';
+    if (referenceContext.preProcessingSummary) {
+      preProcessingSection = `\n\nPRE-PROCESSING REPORT:\n${referenceContext.preProcessingSummary}`;
+    }
+
     const systemPrompt = `You are a senior Laravel architect creating a precise, ordered upgrade execution plan.
 
-You understand all breaking changes between Laravel versions and how to safely migrate applications.
+You have authoritative data sources for this upgrade. Use them as your PRIMARY sources.
+Only use your training knowledge for project-specific decisions not covered by these sources.
 
 Known breaking changes for this upgrade path:
 ${breakingSection}
 
 Additional upgrade hints:
 ${matrixHints.map(h => `- ${h}`).join('\n')}
+${referenceSection}${guideSection}${preProcessingSection}
 
 Your plan must be executable by automated agents — be specific, ordered, and safe.
+Plan ONLY the changes that require contextual understanding — do NOT redo pre-processed changes.
 
 Output a JSON object with this structure:
 {

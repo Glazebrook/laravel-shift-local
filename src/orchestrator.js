@@ -24,6 +24,12 @@ import { ShiftBaseError } from './errors.js';
 import { execCommandSync } from './shell.js';
 // L1 FIX: Use shared sleep utility instead of duplicating
 import { sleep } from './utils.js';
+import { runPreProcessing, generatePreProcessingSummary } from './pre-processor.js';
+import { runStyleFormatting, generateStyleReport } from './style-formatter.js';
+import { loadManifest, getTransitionChain, getAggregatedComposerChanges } from './reference-data.js';
+import { formatGuideForPlanner } from './upgrade-guide.js';
+import { checkRoutes, generateRouteReport } from './route-checker.js';
+import { generateBlueprintYaml } from './blueprint-exporter.js';
 
 const MAX_PHASE_RETRIES = 3;
 
@@ -167,10 +173,12 @@ export class Orchestrator {
     // ── Phase loop ────────────────────────────────────────────
     const phases = [
       { id: PHASES.ANALYZING, fn: () => this._runAnalysis() },
+      { id: 'PRE_PROCESSING', fn: () => this._runPreProcessing(), skipInDryRun: false },
       { id: PHASES.PLANNING, fn: () => this._runPlanning() },
       { id: PHASES.DEPENDENCIES, fn: () => this._runDependencies(), skipInDryRun: true },
       { id: PHASES.TRANSFORMING, fn: () => this._runTransformations(), skipInDryRun: true },
       { id: PHASES.VALIDATING, fn: () => this._runValidation(), skipInDryRun: true },
+      { id: 'STYLE_FORMATTING', fn: () => this._runStyleFormatting(), skipInDryRun: true },
       // LOW-6 FIX: Skip REPORTING in dry-run mode — the report would show
       // "0/0 files transformed" which is misleading. The analysis and plan
       // output from earlier phases is sufficient for dry-run purposes.
@@ -630,6 +638,63 @@ export class Orchestrator {
     await this._phaseCommit('analysis', `${analysis.upgradeComplexity} complexity`);
   }
 
+  // ─── Pre-Processing (deterministic transforms) ──────────────
+
+  async _runPreProcessing() {
+    const s = this.state.get();
+    const preProcessingConfig = this.config.preProcessing || {};
+
+    if (preProcessingConfig.enabled === false) {
+      await this.logger.info('Orchestrator', 'Pre-processing disabled via config');
+      this.state.set('preProcessingResult', { transforms: [], filesModified: 0, totalChanges: 0 });
+      return;
+    }
+
+    await this.logger.phase('PRE-PROCESSING: Deterministic Transforms');
+
+    const result = await runPreProcessing(
+      this.projectPath,
+      s.fromVersion,
+      s.toVersion,
+      { dryRun: this.config.dryRun || this.options.dryRun, verbose: this.config.verbose, logger: this.logger },
+      preProcessingConfig
+    );
+
+    this.state.set('preProcessingResult', result);
+
+    if (result.totalChanges > 0) {
+      await this.logger.success('Orchestrator',
+        `Pre-processing: ${result.totalChanges} change(s) across ${result.filesModified} file(s)`);
+      await this._phaseCommit('pre-processing', `${result.totalChanges} deterministic transforms`);
+    } else {
+      await this.logger.info('Orchestrator', 'Pre-processing: no changes needed');
+    }
+  }
+
+  // ─── Style Formatting (post-processing) ─────────────────────
+
+  async _runStyleFormatting() {
+    const styleConfig = this.config.codeStyle || {};
+
+    await this.logger.phase('STYLE FORMATTING: Code Style Post-Processing');
+
+    const result = await runStyleFormatting(
+      this.projectPath,
+      { dryRun: this.config.dryRun || this.options.dryRun, verbose: this.config.verbose, logger: this.logger },
+      styleConfig
+    );
+
+    this.state.set('styleResult', result);
+
+    if (result.formatted) {
+      await this.logger.success('Orchestrator',
+        `Style formatting: ${result.filesChanged} file(s) reformatted with ${result.formatter}`);
+      await this._phaseCommit('style', `${result.filesChanged} files formatted`);
+    } else {
+      await this.logger.info('Orchestrator', `Style formatting: ${result.formatter === 'none' ? 'disabled' : 'no changes'}`);
+    }
+  }
+
   /**
    * H6 FIX: Pass current transformation state to planner so it can
    * account for already-completed work when generating the plan on resume.
@@ -642,7 +707,16 @@ export class Orchestrator {
       .filter(([, v]) => v.status === 'done')
       .map(([k, v]) => ({ filepath: k, description: v.description || '' }));
 
-    const plan = await this.agents.planner.plan(s.analysis, s.fromVersion, s.toVersion, completedFiles);
+    // Enrich planner context with reference data, upgrade guide, and pre-processing results
+    const referenceContext = {
+      manifest: loadManifest(s.fromVersion, s.toVersion),
+      transitionChain: getTransitionChain(s.fromVersion, s.toVersion),
+      composerChanges: getAggregatedComposerChanges(s.fromVersion, s.toVersion),
+      upgradeGuide: formatGuideForPlanner(s.toVersion),
+      preProcessingSummary: generatePreProcessingSummary(s.preProcessingResult),
+    };
+
+    const plan = await this.agents.planner.plan(s.analysis, s.fromVersion, s.toVersion, completedFiles, referenceContext);
     this._captureTokenUsage('planner');
 
     // M4 FIX: Validate that the plan has the expected structure.
@@ -694,7 +768,8 @@ export class Orchestrator {
       await this.logger.warn('Orchestrator', 'No plan available (planning phase failed) — skipping dependency update');
       return;
     }
-    const result = await this.agents.dependency.updateDependencies(s.plan);
+    const referenceComposer = getAggregatedComposerChanges(s.fromVersion, s.toVersion);
+    const result = await this.agents.dependency.updateDependencies(s.plan, referenceComposer);
     this._captureTokenUsage('dependency');
     this.state.set('dependencyResult', result);
     await this._phaseCommit('dependencies', 'composer.json updated');
@@ -717,6 +792,25 @@ export class Orchestrator {
     const s = this.state.get();
     const validation = await this.agents.validator.validate(s.analysis || {}, s.plan || {}, { runTests: this.config.runTests });
     this._captureTokenUsage('validator');
+
+    // Dead route detection (runs after syntax checks)
+    try {
+      await this.logger.info('Orchestrator', 'Running dead route detection...');
+      const routeResult = await checkRoutes(this.projectPath);
+      validation.routeCheck = routeResult;
+      if (routeResult.deadRoutes.length > 0) {
+        await this.logger.warn('Orchestrator',
+          `Dead route detection: ${routeResult.deadRoutes.length} dead route(s) found`);
+        validation.warnings = validation.warnings || [];
+        validation.warnings.push(`${routeResult.deadRoutes.length} dead route(s) detected — see SHIFT_REPORT.md`);
+      } else {
+        await this.logger.success('Orchestrator',
+          `Route health check: all ${routeResult.checked} route(s) valid`);
+      }
+    } catch (err) {
+      await this.logger.warn('Orchestrator', `Dead route detection failed: ${err.message}`);
+    }
+
     this.state.set('validation', validation);
     await this._phaseCommit('validation', validation.passed ? 'PASSED' : 'WARNINGS');
     if (validation.passed) {
@@ -728,6 +822,22 @@ export class Orchestrator {
 
   async _runReporting() {
     const s = this.state.get();
+
+    // Generate Blueprint YAML if enabled
+    const blueprintConfig = this.config.blueprint || {};
+    if (blueprintConfig.enabled !== false) {
+      try {
+        const blueprint = await generateBlueprintYaml(this.projectPath, {
+          includeControllers: blueprintConfig.includeControllers !== false,
+          outputPath: blueprintConfig.outputPath || '.shift/blueprint.yaml',
+          logger: this.logger,
+        });
+        this.state.set('blueprint', blueprint);
+      } catch (err) {
+        await this.logger.warn('Orchestrator', `Blueprint YAML generation failed: ${err.message}`);
+      }
+    }
+
     const report = await this.agents.reporter.generateReport(s);
     this._captureTokenUsage('reporter');
     this.state.set('report', report);

@@ -6,6 +6,9 @@
 
 import { BaseAgent } from './base-agent.js';
 import { join } from 'node:path';
+import { generatePreProcessingSummary } from '../pre-processor.js';
+import { generateStyleReport } from '../style-formatter.js';
+import { generateRouteReport } from '../route-checker.js';
 
 export class ReporterAgent extends BaseAgent {
   constructor(deps) {
@@ -122,6 +125,10 @@ Return the structured JSON now.`,
     const report = this._renderReport(reportData, {
       fromVersion, toVersion, branchName, transformations, validation,
       gitLog, phaseTimings: phaseTimings || {}, tokenUsage: tokenUsage || {},
+      preProcessingResult: state.preProcessingResult,
+      styleResult: state.styleResult,
+      routeCheck: validation?.routeCheck,
+      blueprint: state.blueprint,
     });
 
     const reportRelPath = 'SHIFT_REPORT.md';
@@ -152,7 +159,8 @@ Return the structured JSON now.`,
   }
 
   _renderReport(data, context) {
-    const { fromVersion, toVersion, branchName, transformations, validation, gitLog, phaseTimings, tokenUsage } = context;
+    const { fromVersion, toVersion, branchName, transformations, validation, gitLog, phaseTimings, tokenUsage,
+      preProcessingResult, styleResult, routeCheck, blueprint } = context;
 
     // M3 FIX: Calculate total duration
     const totalMs = Object.values(phaseTimings).reduce((sum, t) => sum + (t.durationMs || 0), 0);
@@ -202,6 +210,31 @@ Return the structured JSON now.`,
         md += `| ${agent} | ${inp.toLocaleString()} | ${out.toLocaleString()} | ${calls} |\n`;
       }
       md += `| **Total** | **${totalInput.toLocaleString()}** | **${totalOutput.toLocaleString()}** | **${totalCalls}** |\n\n`;
+    }
+
+    // Pre-Processing Summary
+    if (preProcessingResult && preProcessingResult.totalChanges > 0) {
+      md += `## Pre-Processing Summary\n\n`;
+      md += `| Transform | Files Changed | Description |\n`;
+      md += `|-----------|--------------|-------------|\n`;
+      for (const t of preProcessingResult.transforms || []) {
+        if (t.filesModified > 0) {
+          md += `| ${t.name} | ${t.filesModified} | ${this._escMd(t.description)} |\n`;
+        }
+      }
+      md += `\n`;
+    }
+
+    // Code Style
+    if (styleResult) {
+      md += `## Code Style\n\n`;
+      md += `${generateStyleReport(styleResult)}\n\n`;
+    }
+
+    // Route Health Check
+    if (routeCheck) {
+      md += `## Route Health Check\n\n`;
+      md += `${generateRouteReport(routeCheck)}\n\n`;
     }
 
     // Automatic Changes
@@ -266,6 +299,18 @@ Return the structured JSON now.`,
       md += `${i + 1}. ${step}\n`;
     });
     md += `\n`;
+
+    // Blueprint YAML Appendix
+    if (blueprint?.yaml) {
+      md += `## Appendix: Blueprint YAML\n\n`;
+      md += `The following Blueprint-compatible YAML describes your project's current structure `;
+      md += `after the upgrade. You can use this with \`laravel-shift/blueprint\` to regenerate `;
+      md += `scaffolding or as living documentation.\n\n`;
+      md += `\`\`\`yaml\n${this._escCodeFence(blueprint.yaml)}\n\`\`\`\n\n`;
+      if (blueprint.outputPath) {
+        md += `Full file saved to: \`${blueprint.outputPath}\`\n\n`;
+      }
+    }
 
     // Git Log
     if (gitLog) {

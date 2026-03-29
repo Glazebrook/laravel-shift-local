@@ -16,12 +16,21 @@ export class DependencyAgent extends BaseAgent {
     this.composerTimeout = (deps.config?.composerTimeout || 600) * 1000;
   }
 
-  async updateDependencies(plan) {
+  async updateDependencies(plan, referenceComposer = null) {
     await this.logger.phase('PHASE 3: Updating Dependencies');
 
     const depStep = plan.phases?.find(p => p.phase === 'dependencies');
     if (!depStep?.steps?.length) {
       await this.logger.warn(this.name, 'No dependency steps in plan, using composer.json target');
+    }
+
+    let referenceSection = '';
+    if (referenceComposer) {
+      referenceSection = `\n\nREFERENCE COMPOSER CHANGES (authoritative — from Laravel Shift skeleton repos):
+${JSON.stringify(referenceComposer, null, 2)}
+
+Apply these version changes as the baseline, then resolve any additional
+dependency conflicts specific to this project's third-party packages.`;
     }
 
     const systemPrompt = `You are a Composer dependency expert. You must update the composer.json file to target the new Laravel version.
@@ -35,6 +44,7 @@ Rules:
 4. Preserve all custom scripts, autoload config, and extra settings
 5. Update PHP version constraint if needed
 6. Handle known package renames (e.g. barryvdh/* package updates)
+${referenceSection}
 
 Use the read_file tool to read the current composer.json, then write_file to update it.
 After updating, output a JSON summary of what changed.`;
