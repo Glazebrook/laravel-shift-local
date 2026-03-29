@@ -383,3 +383,101 @@ describe('Orchestrator._ensureGitignore', () => {
     sm.destroy();
   });
 });
+
+// ── Post-transform safety checks ──────────────────────────────
+
+describe('E2E-2: postTransformChecks()', () => {
+  let tempDir;
+
+  beforeEach(() => {
+    tempDir = makeTempDir();
+    mkdirSync(join(tempDir, '.shift', 'backups'), { recursive: true });
+    mkdirSync(join(tempDir, 'config'), { recursive: true });
+  });
+  afterEach(() => cleanDir(tempDir));
+
+  it('deletes config tombstone (comments only) with backup', async () => {
+    writeFileSync(join(tempDir, 'config', 'cors.php'), '<?php\n/* THIS FILE SHOULD BE DELETED */\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '11');
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].action, 'deleted');
+    assert.ok(!existsSync(join(tempDir, 'config', 'cors.php')));
+    assert.ok(existsSync(join(tempDir, '.shift', 'backups', 'config', 'cors.php')));
+  });
+
+  it('leaves config file with return [] alone', async () => {
+    writeFileSync(join(tempDir, 'config', 'app.php'), '<?php\nreturn [\n  "name" => "test"\n];\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '11');
+    assert.equal(issues.length, 0);
+    assert.ok(existsSync(join(tempDir, 'config', 'app.php')));
+  });
+
+  it('warns about config with code but no return', async () => {
+    writeFileSync(join(tempDir, 'config', 'weird.php'), '<?php\n$x = "hello";\necho $x;\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '11');
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].action, 'warning');
+  });
+
+  it('deletes Kernel.php tombstone when target >= 11', async () => {
+    mkdirSync(join(tempDir, 'app', 'Http'), { recursive: true });
+    writeFileSync(join(tempDir, 'app', 'Http', 'Kernel.php'), '<?php\n// DELETED — Laravel 11 upgrade\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '11');
+    const kernelIssue = issues.find(i => i.file === 'app/Http/Kernel.php');
+    assert.ok(kernelIssue);
+    assert.equal(kernelIssue.action, 'deleted');
+    assert.ok(!existsSync(join(tempDir, 'app', 'Http', 'Kernel.php')));
+  });
+
+  it('does NOT delete Kernel.php tombstone when target is 10', async () => {
+    mkdirSync(join(tempDir, 'app', 'Http'), { recursive: true });
+    writeFileSync(join(tempDir, 'app', 'Http', 'Kernel.php'), '<?php\n// DELETED\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '10');
+    const kernelIssue = issues.find(i => i.file === 'app/Http/Kernel.php');
+    assert.equal(kernelIssue, undefined);
+    assert.ok(existsSync(join(tempDir, 'app', 'Http', 'Kernel.php')));
+  });
+
+  it('preserves Kernel.php with real code', async () => {
+    mkdirSync(join(tempDir, 'app', 'Http'), { recursive: true });
+    writeFileSync(join(tempDir, 'app', 'Http', 'Kernel.php'), '<?php\nclass Kernel extends HttpKernel {\n  function boot() {}\n}\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '11');
+    const kernelIssue = issues.find(i => i.file === 'app/Http/Kernel.php');
+    assert.equal(kernelIssue, undefined);
+    assert.ok(existsSync(join(tempDir, 'app', 'Http', 'Kernel.php')));
+  });
+
+  it('deletes empty file (like CreatesApplication.php written as "")', async () => {
+    mkdirSync(join(tempDir, 'tests'), { recursive: true });
+    writeFileSync(join(tempDir, 'tests', 'CreatesApplication.php'), '');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '11');
+    const found = issues.find(i => i.file === 'tests/CreatesApplication.php');
+    assert.ok(found);
+    assert.equal(found.action, 'deleted');
+  });
+
+  it('handles multiple tombstones in single pass', async () => {
+    mkdirSync(join(tempDir, 'app', 'Http', 'Middleware'), { recursive: true });
+    writeFileSync(join(tempDir, 'app', 'Http', 'Kernel.php'), '<?php\n// removed\n');
+    writeFileSync(join(tempDir, 'app', 'Http', 'Middleware', 'TrustProxies.php'), '<?php\n// removed\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '11');
+    const deleted = issues.filter(i => i.action === 'deleted');
+    assert.ok(deleted.length >= 2);
+  });
+
+  it('creates backup in correct directory structure', async () => {
+    mkdirSync(join(tempDir, 'app', 'Http', 'Middleware'), { recursive: true });
+    writeFileSync(join(tempDir, 'app', 'Http', 'Middleware', 'TrimStrings.php'), '<?php\n// tombstone\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    postTransformChecks(tempDir, '11');
+    assert.ok(existsSync(join(tempDir, '.shift', 'backups', 'app', 'Http', 'Middleware', 'TrimStrings.php')));
+  });
+});

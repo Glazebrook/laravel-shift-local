@@ -11,8 +11,8 @@
 import { PHASES } from './state-manager.js';
 import { GitManager } from './git-manager.js';
 import { FileTools } from './file-tools.js';
-import { existsSync, writeFileSync, unlinkSync, readFileSync, mkdirSync, statSync, utimesSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, writeFileSync, unlinkSync, readFileSync, mkdirSync, statSync, utimesSync, readdirSync, copyFileSync } from 'node:fs';
+import { join, dirname, basename } from 'node:path';
 import { AnalyzerAgent } from './agents/analyzer-agent.js';
 import { PlannerAgent } from './agents/planner-agent.js';
 import { DependencyAgent } from './agents/dependency-agent.js';
@@ -37,6 +37,103 @@ const MAX_PHASE_RETRIES = 3;
 const STALE_LOCK_MS_WIN = 600_000;               // H5 FIX: 10 min on Windows (2× heartbeat interval)
 const CI_HEARTBEAT_INTERVAL_MS = 60_000;         // 60s between CI heartbeats
 const LOCK_HEARTBEAT_INTERVAL_MS = 300_000;      // 5 min between lock file touches
+
+/**
+ * Post-transform safety checks.
+ * Catches common LLM mistakes (tombstone files) before the validator runs.
+ */
+export function postTransformChecks(projectRoot, toVersion) {
+  const issues = [];
+
+  // 1. Config files must return arrays
+  const configDir = join(projectRoot, 'config');
+  if (existsSync(configDir)) {
+    const configFiles = readdirSync(configDir).filter(f => f.endsWith('.php'));
+
+    for (const file of configFiles) {
+      const filePath = join(configDir, file);
+      const content = readFileSync(filePath, 'utf-8');
+
+      const stripped = content
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*/g, '')
+        .trim();
+
+      const hasReturn = /return\s+\[/.test(content) || /return\s+array\s*\(/.test(content);
+
+      if (!hasReturn) {
+        const isOnlyComments = !stripped.replace(/<\?php/i, '').trim();
+
+        if (isOnlyComments || stripped === '<?php' || stripped === '') {
+          const backupDir = join(projectRoot, '.shift', 'backups', 'config');
+          mkdirSync(backupDir, { recursive: true });
+          copyFileSync(filePath, join(backupDir, file));
+          unlinkSync(filePath);
+          issues.push({
+            file: `config/${file}`,
+            action: 'deleted',
+            reason: 'Tombstone config file (no return statement) — would crash Laravel LoadConfiguration',
+          });
+        } else {
+          issues.push({
+            file: `config/${file}`,
+            action: 'warning',
+            reason: 'Config file has code but no array return — may break Laravel boot',
+          });
+        }
+      }
+    }
+  }
+
+  // 2. Structural tombstone cleanup for Laravel 11+ targets
+  if (parseInt(toVersion) >= 11) {
+    const tombstoneCandidates = [
+      'app/Http/Kernel.php',
+      'app/Console/Kernel.php',
+      'app/Exceptions/Handler.php',
+      'app/Providers/RouteServiceProvider.php',
+      'app/Providers/BroadcastServiceProvider.php',
+      'app/Providers/EventServiceProvider.php',
+      'app/Providers/AuthServiceProvider.php',
+      'app/Http/Middleware/Authenticate.php',
+      'app/Http/Middleware/EncryptCookies.php',
+      'app/Http/Middleware/PreventRequestsDuringMaintenance.php',
+      'app/Http/Middleware/RedirectIfAuthenticated.php',
+      'app/Http/Middleware/TrimStrings.php',
+      'app/Http/Middleware/TrustHosts.php',
+      'app/Http/Middleware/TrustProxies.php',
+      'app/Http/Middleware/ValidateSignature.php',
+      'app/Http/Middleware/VerifyCsrfToken.php',
+      'tests/CreatesApplication.php',
+    ];
+
+    for (const relPath of tombstoneCandidates) {
+      const filePath = join(projectRoot, relPath);
+      if (!existsSync(filePath)) continue;
+
+      const content = readFileSync(filePath, 'utf-8');
+      const stripped = content
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*/g, '')
+        .replace(/<\?php/gi, '')
+        .trim();
+
+      if (!stripped || (!stripped.includes('class') && !stripped.includes('function') && !stripped.includes('return'))) {
+        const backupDir = join(projectRoot, '.shift', 'backups', dirname(relPath));
+        mkdirSync(backupDir, { recursive: true });
+        copyFileSync(filePath, join(backupDir, basename(relPath)));
+        unlinkSync(filePath);
+        issues.push({
+          file: relPath,
+          action: 'deleted',
+          reason: `Tombstone file — not used in Laravel ${toVersion}+`,
+        });
+      }
+    }
+  }
+
+  return issues;
+}
 
 /**
  * C1 FIX: ShiftError moved above Orchestrator class.
@@ -177,6 +274,7 @@ export class Orchestrator {
       { id: PHASES.PLANNING, fn: () => this._runPlanning() },
       { id: PHASES.DEPENDENCIES, fn: () => this._runDependencies(), skipInDryRun: true },
       { id: PHASES.TRANSFORMING, fn: () => this._runTransformations(), skipInDryRun: true },
+      { id: 'POST_TRANSFORM_CHECKS', fn: () => this._runPostTransformChecks(), skipInDryRun: true },
       { id: PHASES.VALIDATING, fn: () => this._runValidation(), skipInDryRun: true },
       { id: 'STYLE_FORMATTING', fn: () => this._runStyleFormatting(), skipInDryRun: true },
       // LOW-6 FIX: Skip REPORTING in dry-run mode — the report would show
@@ -786,6 +884,26 @@ export class Orchestrator {
     this._captureTokenUsage('transformer');
     await this._phaseCommit('transforms', `${results.transformed.length} files transformed`);
     await this.logger.success('Orchestrator', `Transforms: ${results.transformed.length} done, ${results.failed.length} failed, ${results.skipped.length} skipped`);
+  }
+
+  async _runPostTransformChecks() {
+    const s = this.state.get();
+    const toVersion = s.toVersion;
+    const issues = postTransformChecks(this.projectPath, toVersion);
+
+    if (issues.length > 0) {
+      for (const issue of issues) {
+        if (issue.action === 'deleted') {
+          await this.logger.warn('Orchestrator', `Post-transform cleanup: deleted ${issue.file} — ${issue.reason}`);
+        } else {
+          await this.logger.warn('Orchestrator', `Post-transform warning: ${issue.file} — ${issue.reason}`);
+        }
+      }
+      this.state.set('postTransformIssues', issues);
+      await this._phaseCommit('post-transform-checks', `${issues.filter(i => i.action === 'deleted').length} tombstone(s) cleaned`);
+    } else {
+      await this.logger.info('Orchestrator', 'Post-transform checks: no issues found');
+    }
   }
 
   async _runValidation() {
