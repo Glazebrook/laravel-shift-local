@@ -204,6 +204,8 @@ Rules:
 5. Always output valid PHP/Blade syntax
 6. Preserve namespaces and imports exactly unless changing them
 
+When a file should be REMOVED in the target Laravel version (e.g., config/cors.php, app/Http/Kernel.php, removed middleware files, removed service providers), use the delete_file tool to delete it. Do NOT replace the file contents with a comment saying it should be deleted — this breaks Laravel's config loading and leaves dead code. Always use delete_file for removed files. Always use write_file for modified files.
+
 After transformation, output JSON:
 {
   "ok": true,
@@ -211,11 +213,13 @@ After transformation, output JSON:
   "notes": ["any warnings or items needing manual review"],
   "skipped": ["patterns not found"],
   "renamedTo": null,
-  "newFilesCreated": []
+  "newFilesCreated": [],
+  "deletedFiles": []
 }
 
 If you rename or move a file, set "renamedTo" to the new path.
-If you create new files, list them in "newFilesCreated".`;
+If you create new files, list them in "newFilesCreated".
+If you delete files, list them in "deletedFiles".`;
 
     const tools = this.fileTools.getAgentTools();
 
@@ -242,8 +246,8 @@ ${manifestContext}
 
 Steps:
 1. Read the current file with read_file
-2. Apply all required transformations  
-3. Write the updated file with write_file
+2. Apply all required transformations
+3. Write the updated file with write_file, or delete it with delete_file if it should be removed
 4. Report what was changed`,
     }];
 

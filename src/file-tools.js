@@ -268,6 +268,18 @@ export class FileTools {
           },
         },
         {
+          name: 'delete_file',
+          description: 'Delete a file that should be removed in the target Laravel version. Creates a backup first. Use this instead of writing a comment saying the file should be deleted.',
+          input_schema: {
+            type: 'object',
+            properties: {
+              filepath: { type: 'string', description: 'Relative path from project root' },
+              reason: { type: 'string', description: 'Why this file is being deleted (for the report)' },
+            },
+            required: ['filepath', 'reason'],
+          },
+        },
+        {
           name: 'file_exists',
           description: 'Check if a file exists in the project',
           input_schema: {
@@ -393,6 +405,57 @@ export class FileTools {
             return { files };
           } catch (e) {
             return { error: e.message };
+          }
+        },
+        delete_file: async ({ filepath, reason }) => {
+          await self.logger.tool('FileTools', `delete_file: ${filepath} (${reason})`);
+          if (_activeToolCall) {
+            return { error: 'Concurrent tool call detected — agents must not share a FileTools instance simultaneously.' };
+          }
+          _activeToolCall = true;
+          try {
+            const abs = self._abs(filepath);
+
+            // Same protection as write_file: block .shift/, protected dirs, excluded paths
+            const shiftDir = join(self.projectPath, '.shift');
+            const shiftPrefix = shiftDir + (shiftDir.endsWith(sep) ? '' : sep);
+            const isCaseInsensitive = process.platform === 'darwin' || process.platform === 'win32';
+            const absCheck = isCaseInsensitive ? abs.toLowerCase() : abs;
+            const shiftDirCheck = isCaseInsensitive ? shiftDir.toLowerCase() : shiftDir;
+            const shiftPrefixCheck = isCaseInsensitive ? shiftPrefix.toLowerCase() : shiftPrefix;
+            if (absCheck === shiftDirCheck || absCheck.startsWith(shiftPrefixCheck)) {
+              return { error: 'Cannot delete files in .shift/ directory — this is reserved for shift state and backups.' };
+            }
+
+            const DEFAULT_PROTECTED = ['vendor', 'node_modules', '.git', 'storage/framework', 'bootstrap/cache'];
+            let normalizedDel = normalize(filepath).replace(/\\/g, '/').replace(/^\.\//, '');
+            if (isCaseInsensitive) normalizedDel = normalizedDel.toLowerCase();
+            for (const prot of DEFAULT_PROTECTED) {
+              const protCheck = isCaseInsensitive ? prot.toLowerCase() : prot;
+              if (normalizedDel === protCheck || normalizedDel.startsWith(protCheck + '/')) {
+                return { error: `Cannot delete files in protected directory: ${filepath}` };
+              }
+            }
+
+            if (self._isExcludedPath(filepath)) {
+              return { error: `Cannot delete file in excluded path: ${filepath}` };
+            }
+
+            if (!existsSync(abs)) {
+              return { error: `File not found: ${filepath}` };
+            }
+
+            // Create backup before deleting
+            if (!self.hasBackup(filepath)) {
+              self.backup(filepath);
+            }
+
+            unlinkSync(abs);
+            return { deleted: true, backup: join(self.backupDir, filepath), filepath, reason };
+          } catch (e) {
+            return { error: e.message };
+          } finally {
+            _activeToolCall = false;
           }
         },
         file_exists: async ({ filepath }) => {

@@ -7,7 +7,7 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, rmSync, existsSync, readFileSync } from 'fs';
+import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -509,5 +509,94 @@ describe('FIX #8: Transformer merges multi-step file plans', () => {
     const source = readFileSync(join(import.meta.dirname, '..', 'src', 'agents', 'transformer-agent.js'), 'utf8');
     assert.ok(source.includes('stepsByFile'), 'Should have stepsByFile Map for merging');
     assert.ok(source.includes('mergedSteps'), 'Should iterate over mergedSteps');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════
+// E2E-1 — delete_file tool in file-tools.js
+// ══════════════════════════════════════════════════════════════════
+
+describe('E2E-1: delete_file tool', () => {
+  let tempDir, fileTools;
+
+  beforeEach(async () => {
+    tempDir = makeTempDir();
+    mkdirSync(join(tempDir, '.shift', 'backups'), { recursive: true });
+    mkdirSync(join(tempDir, 'config'), { recursive: true });
+    mkdirSync(join(tempDir, 'app', 'Http'), { recursive: true });
+    const { FileTools } = await import('../src/file-tools.js');
+    fileTools = new FileTools(tempDir, makeLogger());
+  });
+
+  afterEach(() => cleanDir(tempDir));
+
+  it('creates backup before deleting', async () => {
+    writeFileSync(join(tempDir, 'config', 'cors.php'), '<?php return [];');
+    const tools = fileTools.getAgentTools();
+    const result = await tools.handlers.delete_file({ filepath: 'config/cors.php', reason: 'Removed in Laravel 11' });
+    assert.ok(result.deleted);
+    assert.ok(!existsSync(join(tempDir, 'config', 'cors.php')), 'Original file should be deleted');
+    assert.ok(existsSync(join(tempDir, '.shift', 'backups', 'config', 'cors.php')), 'Backup should exist');
+  });
+
+  it('returns correct response shape', async () => {
+    writeFileSync(join(tempDir, 'config', 'cors.php'), '<?php return [];');
+    const tools = fileTools.getAgentTools();
+    const result = await tools.handlers.delete_file({ filepath: 'config/cors.php', reason: 'test reason' });
+    assert.equal(result.deleted, true);
+    assert.equal(result.filepath, 'config/cors.php');
+    assert.equal(result.reason, 'test reason');
+    assert.ok(result.backup);
+  });
+
+  it('rejects paths outside project root (sandbox check)', async () => {
+    const tools = fileTools.getAgentTools();
+    const result = await tools.handlers.delete_file({ filepath: '../../etc/passwd', reason: 'test' });
+    assert.ok(result.error);
+    assert.match(result.error, /traversal/i);
+  });
+
+  it('handles non-existent file gracefully', async () => {
+    const tools = fileTools.getAgentTools();
+    const result = await tools.handlers.delete_file({ filepath: 'config/nonexistent.php', reason: 'test' });
+    assert.ok(result.error);
+    assert.match(result.error, /not found/i);
+  });
+
+  it('creates nested backup directories if needed', async () => {
+    mkdirSync(join(tempDir, 'app', 'Http', 'Middleware'), { recursive: true });
+    writeFileSync(join(tempDir, 'app', 'Http', 'Middleware', 'TrustProxies.php'), '<?php class TrustProxies {}');
+    const tools = fileTools.getAgentTools();
+    const result = await tools.handlers.delete_file({ filepath: 'app/Http/Middleware/TrustProxies.php', reason: 'Removed in L11' });
+    assert.ok(result.deleted);
+    assert.ok(existsSync(join(tempDir, '.shift', 'backups', 'app', 'Http', 'Middleware', 'TrustProxies.php')));
+  });
+
+  it('blocks deletion in .shift/ directory', async () => {
+    writeFileSync(join(tempDir, '.shift', 'state.json'), '{}');
+    const tools = fileTools.getAgentTools();
+    const result = await tools.handlers.delete_file({ filepath: '.shift/state.json', reason: 'test' });
+    assert.ok(result.error);
+    assert.match(result.error, /Cannot delete/);
+  });
+
+  it('blocks deletion in protected directories', async () => {
+    mkdirSync(join(tempDir, 'vendor'), { recursive: true });
+    writeFileSync(join(tempDir, 'vendor', 'autoload.php'), '<?php');
+    const tools = fileTools.getAgentTools();
+    const result = await tools.handlers.delete_file({ filepath: 'vendor/autoload.php', reason: 'test' });
+    assert.ok(result.error);
+    assert.match(result.error, /protected directory/i);
+  });
+
+  it('transformer agent has delete_file in its tool definitions', () => {
+    const tools = fileTools.getAgentTools();
+    const names = tools.definitions.map(d => d.name);
+    assert.ok(names.includes('delete_file'), 'delete_file should be in tool definitions');
+  });
+
+  it('transformer agent system prompt mentions delete_file', () => {
+    const source = readFileSync(join(import.meta.dirname, '..', 'src', 'agents', 'transformer-agent.js'), 'utf8');
+    assert.ok(source.includes('delete_file'), 'Transformer system prompt should mention delete_file');
   });
 });
