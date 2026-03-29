@@ -14,6 +14,7 @@ import latestOldest from './latest-oldest.js';
 import explicitOrderby from './explicit-orderby.js';
 import downMigration from './down-migration.js';
 import laravelCarbon from './laravel-carbon.js';
+import l11Structural from './l11-structural.js';
 
 export const transforms = [
   anonymousMigrations,
@@ -28,6 +29,8 @@ export const transforms = [
   explicitOrderby,
   downMigration,
   laravelCarbon,
+  // Project-level transforms run last (after all file-level transforms)
+  l11Structural,
 ];
 
 /**
@@ -39,12 +42,16 @@ export const transforms = [
  */
 export function getApplicableTransforms(fromVersion, toVersion, config = {}) {
   const from = parseInt(String(fromVersion).split('.')[0], 10);
+  const to = parseInt(String(toVersion).split('.')[0], 10);
 
   return transforms.filter(t => {
-    // Version range check
+    // Version range check (source version)
     const tFrom = parseInt(t.appliesFrom || '0', 10);
     const tTo = t.appliesTo ? parseInt(t.appliesTo, 10) : Infinity;
     if (from < tFrom || from > tTo) return false;
+
+    // Target minimum version check
+    if (t.targetMinVersion && to < t.targetMinVersion) return false;
 
     // Config check: explicit enable/disable in .shiftrc
     const configKey = t.configKey || t.name;
