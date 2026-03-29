@@ -32,7 +32,24 @@
       "Bash(node --test test/route-checker.test.js)",
       "Bash(node -e \":*)",
       "Bash(node --test --test-name-pattern=\"validates resource\" test/route-checker.test.js)",
-      "Bash(node --test test/pipeline-integration.test.js)"
+      "Bash(node --test test/pipeline-integration.test.js)",
+      "Bash(grep -r globals /c/Projects/laravel-shift-local/src /c/Projects/laravel-shift-local/bin --include=*.js)",
+      "Bash(php --version)",
+      "Bash(composer --version)",
+      "Bash(git --version)",
+      "Bash(node c:/Projects/laravel-shift-local/bin/shift.js --version)",
+      "Bash(php.exe --version)",
+      "Bash(cmd //c \"php --version\")",
+      "Bash(composer.bat --version)",
+      "Bash(composer.phar --version)",
+      "Bash(node bin/shift.js --version)",
+      "Bash(where php:*)",
+      "Bash(where composer:*)",
+      "Bash(source /tmp/lshift-env.sh)",
+      "Read(//c/Projects/laravel-shift-local/$TEST_WORKSPACE/**)",
+      "Bash(__NEW_LINE_26604e0a6c868b0c__ cat:*)",
+      "Bash(.shiftrc:*)",
+      "Bash(__NEW_LINE_26604e0a6c868b0c__ echo:*)"
     ]
   }
 }

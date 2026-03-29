@@ -12,7 +12,7 @@ import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  BaseAgent, AgentError, _resetSharedClient,
+  BaseAgent, _resetSharedClient,
 } from '../src/agents/base-agent.js';
 
 function makeLogger() {
@@ -363,7 +363,7 @@ describe('AUDIT-2 P3-001: branchPrefix leading slash sanitization', () => {
 import { mkdirSync, rmSync, existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { basename } from 'path';
+
 
 function makeTempDir(prefix = 'shift-audit3-') {
   const dir = join(tmpdir(), prefix + Date.now() + '-' + Math.random().toString(36).slice(2));
@@ -460,7 +460,6 @@ describe('AUDIT-3 P1-002: Logger._flushBuffer writes errors to stderr', () => {
 
 describe('AUDIT-3 P1-004+SEC-005: Git args with quotes rejected', () => {
   it('rejects args containing double quotes', () => {
-    const SAFE_SPACED_RE = /^[a-zA-Z0-9:_\-/.=^~@ ]+$/;
     const arg = 'branch"--inject';
     // The SEC-005 fix explicitly checks for quote chars
     assert.ok(arg.includes('"'), 'Arg contains double quote');

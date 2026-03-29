@@ -166,7 +166,6 @@ describe('Integration: FileTools with fixture project', () => {
 
   it('blocks path traversal', async () => {
     const { FileTools } = await import('../../src/file-tools.js');
-    const { PathTraversalError } = await import('../../src/errors.js');
     const mockLogger = { info: async () => {}, debug: async () => {}, warn: async () => {} };
     const ft = new FileTools(projectDir, mockLogger);
 

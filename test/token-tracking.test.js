@@ -8,12 +8,11 @@ import assert from 'node:assert/strict';
 // ── BaseAgent token tracking ──
 
 describe('BaseAgent per-agent token tracking', () => {
-  let BaseAgent, AgentError, _resetSharedClient;
+  let BaseAgent, _resetSharedClient;
 
   beforeEach(async () => {
     const mod = await import('../src/agents/base-agent.js');
     BaseAgent = mod.BaseAgent;
-    AgentError = mod.AgentError;
     _resetSharedClient = mod._resetSharedClient;
   });
 
@@ -134,7 +133,6 @@ describe('StateManager token usage persistence', () => {
     const { tmpdir } = await import('node:os');
 
     const tmp = mkdtempSync(join(tmpdir(), 'shift-test-'));
-    const logger = { info: async () => {}, debug: async () => {}, warn: async () => {}, success: async () => {}, error: async () => {} };
     const sm1 = new StateManager(tmp);
     sm1.init({ fromVersion: '10', toVersion: '11', projectPath: tmp });
     sm1.setTokenUsage('transformer', { input: 5000, output: 2000, calls: 10 });

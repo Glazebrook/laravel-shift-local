@@ -7,7 +7,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join } from 'node:path';
 import { glob } from 'glob';
 import { getApplicableTransforms } from './transforms/index.js';
 

@@ -25,10 +25,10 @@ import { execCommandSync } from './shell.js';
 // L1 FIX: Use shared sleep utility instead of duplicating
 import { sleep } from './utils.js';
 import { runPreProcessing, generatePreProcessingSummary } from './pre-processor.js';
-import { runStyleFormatting, generateStyleReport } from './style-formatter.js';
+import { runStyleFormatting } from './style-formatter.js';
 import { loadManifest, getTransitionChain, getAggregatedComposerChanges } from './reference-data.js';
 import { formatGuideForPlanner } from './upgrade-guide.js';
-import { checkRoutes, generateRouteReport } from './route-checker.js';
+import { checkRoutes } from './route-checker.js';
 import { generateBlueprintYaml } from './blueprint-exporter.js';
 
 const MAX_PHASE_RETRIES = 3;

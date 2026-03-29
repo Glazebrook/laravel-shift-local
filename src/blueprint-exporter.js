@@ -6,7 +6,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join, basename } from 'node:path';
+import { join } from 'node:path';
 import { glob } from 'glob';
 
 /**
@@ -80,7 +80,7 @@ async function parseModels(projectRoot) {
 /**
  * Parse a single model file.
  */
-function parseModel(content, filePath) {
+function parseModel(content, _filePath) {
   // Extract class name
   const classMatch = content.match(/class\s+(\w+)\s+extends\s+(?:\w+\\)*Model/);
   if (!classMatch) return null;
@@ -193,7 +193,7 @@ async function parseControllers(projectRoot) {
 /**
  * Parse a single controller file.
  */
-function parseController(content, filePath) {
+function parseController(content, _filePath) {
   const classMatch = content.match(/class\s+(\w+)/);
   if (!classMatch) return null;
 

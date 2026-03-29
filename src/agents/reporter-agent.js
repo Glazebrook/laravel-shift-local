@@ -6,7 +6,7 @@
 
 import { BaseAgent } from './base-agent.js';
 import { join } from 'node:path';
-import { generatePreProcessingSummary } from '../pre-processor.js';
+
 import { generateStyleReport } from '../style-formatter.js';
 import { generateRouteReport } from '../route-checker.js';
 

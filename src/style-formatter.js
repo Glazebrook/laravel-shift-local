@@ -5,7 +5,7 @@
  * formatting, reducing noise in the final git diff.
  */
 
-import { existsSync, copyFileSync, unlinkSync, readFileSync } from 'node:fs';
+import { existsSync, copyFileSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execCommand } from './shell.js';
 

@@ -14,7 +14,7 @@ export default {
     return /protected\s+\$table\s*=\s*['"][^'"]+['"]\s*;/.test(content);
   },
 
-  transform(content, filePath) {
+  transform(content, _filePath) {
     if (!this.detect(content)) {
       return { content, changed: false, description: '' };
     }
