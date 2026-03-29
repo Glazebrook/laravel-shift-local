@@ -273,8 +273,8 @@ function validateConfig(config) {
     }
     if (typeof config.git.commitPrefix === 'string') {
       // Strip anything that could inject git command arguments
-      config.git.commitPrefix = config.git.commitPrefix.replace(/[^a-zA-Z0-9[\]_ -]/g, '');
-      if (!config.git.commitPrefix) config.git.commitPrefix = '[shift]';
+      config.git.commitPrefix = config.git.commitPrefix.replace(/[^a-zA-Z0-9_: -]/g, '');
+      if (!config.git.commitPrefix) config.git.commitPrefix = 'shift:';
     }
     if (typeof config.git.createBackupTag !== 'boolean') config.git.createBackupTag = true;
   }
@@ -307,7 +307,7 @@ function loadConfig(projectPath, cliOpts = {}) {
     exclude: { paths: [], filePatterns: [] },
     git: {
       branchPrefix: 'shift/upgrade',
-      commitPrefix: '[shift]',
+      commitPrefix: 'shift:',
       createBackupTag: true,
     },
     shift: {

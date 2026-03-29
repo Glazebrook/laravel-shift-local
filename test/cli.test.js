@@ -150,11 +150,11 @@ describe('Config validation rules', () => {
     assert.equal(prefix, 'custom/upgrade');
   });
 
-  it('commitPrefix sanitisation strips shell chars', () => {
+  it('commitPrefix sanitisation strips shell chars and brackets', () => {
     let prefix = '[shift] && rm -rf';
-    prefix = prefix.replace(/[^a-zA-Z0-9[\]_ -]/g, '');
-    if (!prefix) prefix = '[shift]';
-    assert.equal(prefix, '[shift]  rm -rf');
+    prefix = prefix.replace(/[^a-zA-Z0-9_: -]/g, '');
+    if (!prefix) prefix = 'shift:';
+    assert.equal(prefix, 'shift  rm -rf');
   });
 });
 
