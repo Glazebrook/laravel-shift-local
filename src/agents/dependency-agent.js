@@ -4,7 +4,7 @@
  */
 
 import { BaseAgent } from './base-agent.js';
-import { execa } from 'execa';
+import { execCommand } from '../shell.js';
 
 export class DependencyAgent extends BaseAgent {
   constructor(deps) {
@@ -56,35 +56,22 @@ After updating, output a JSON summary of what changed.`;
     const composerTimeout = this.composerTimeout;
     tools.handlers.run_composer = async ({ args }) => {
       await this.logger.tool(this.name, `composer ${args.join(' ')}`);
-      try {
-        // AUDIT FIX: Allowlist of safe composer subcommands to prevent destructive/global operations.
-        // Blocks: exec, run-script, global, self-update, create-project, etc.
-        const ALLOWED_COMPOSER_CMDS = ['validate', 'update', 'install', 'require', 'remove', 'show', 'outdated', 'dump-autoload', 'check-platform-reqs'];
-        const subCmd = args[0]?.toLowerCase();
-        if (!subCmd || !ALLOWED_COMPOSER_CMDS.includes(subCmd)) {
-          return { ok: false, error: `Blocked disallowed composer command: '${subCmd}'. Allowed: ${ALLOWED_COMPOSER_CMDS.join(', ')}` };
-        }
-        // HIGH-2 FIX: Validate composer arguments against a safe pattern to prevent
-        // command injection when shell: true is used on Windows.
-        // P1-004 FIX: Removed * (glob wildcard) from allowed characters
-        const SAFE_ARG_RE = /^[a-zA-Z0-9:_\-/.=^~@ ]+$/;
-        for (const arg of args) {
-          if (!SAFE_ARG_RE.test(arg)) {
-            return { ok: false, error: `Blocked unsafe argument: ${arg}` };
-          }
-        }
-        const opts = {
-          cwd: this.projectPath,
-          // M11 FIX: Use configurable timeout instead of hardcoded value
-          timeout: composerTimeout,
-        };
-        // H9 FIX: On Windows use shell: true for composer (.bat wrapper)
-        if (process.platform === 'win32') opts.shell = true;
-        const result = await execa('composer', args, opts);
-        return { ok: true, stdout: result.stdout.substring(0, 3000), stderr: result.stderr.substring(0, 500) };
-      } catch (err) {
-        return { ok: false, error: err.stderr?.substring(0, 1000) || err.message };
+      // AUDIT FIX: Allowlist of safe composer subcommands to prevent destructive/global operations.
+      const ALLOWED_COMPOSER_CMDS = ['validate', 'update', 'install', 'require', 'remove', 'show', 'outdated', 'dump-autoload', 'check-platform-reqs'];
+      const subCmd = args[0]?.toLowerCase();
+      if (!subCmd || !ALLOWED_COMPOSER_CMDS.includes(subCmd)) {
+        return { ok: false, error: `Blocked disallowed composer command: '${subCmd}'. Allowed: ${ALLOWED_COMPOSER_CMDS.join(', ')}` };
       }
+      // Centralised via shell.js — arg validation + Windows shell handled automatically.
+      const result = await execCommand('composer', args, {
+        cwd: this.projectPath,
+        timeout: composerTimeout,
+        useProcessEnv: true,
+      });
+      if (result.ok) {
+        return { ok: true, stdout: result.stdout.substring(0, 3000), stderr: result.stderr.substring(0, 500) };
+      }
+      return { ok: false, error: (result.stderr || '').substring(0, 1000) };
     };
 
     const messages = [{

@@ -165,8 +165,14 @@ export class BaseAgent {
     // C7 FIX: Shared token tracker (object reference) and cost cap
     this._tokenTracker = tokenTracker;
     this._maxTotalTokens = maxTotalTokens;
+    // Per-agent token usage tracking
+    this._tokenUsage = { input: 0, output: 0, calls: 0 };
     // M13 FIX: Use shared client instance
     this.client = getSharedClient();
+  }
+
+  get tokenUsage() {
+    return { ...this._tokenUsage };
   }
 
   /**
@@ -229,6 +235,13 @@ export class BaseAgent {
 
       // Add assistant response to history
       messages.push({ role: 'assistant', content: response.content });
+
+      // Track per-agent token usage
+      if (response.usage) {
+        this._tokenUsage.input += response.usage.input_tokens || 0;
+        this._tokenUsage.output += response.usage.output_tokens || 0;
+        this._tokenUsage.calls += 1;
+      }
 
       // C7 FIX: Track cumulative token usage across all agents.
       // If maxTotalTokens is set and exceeded, throw to stop runaway costs.

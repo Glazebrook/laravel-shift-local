@@ -2,7 +2,7 @@
  * GitManager - Safe git operations for the upgrade workflow
  */
 
-import { execa } from 'execa';
+import { execCommand } from './shell.js';
 
 // H3 FIX: Default timeouts for git operations
 const DEFAULT_TIMEOUT = 60_000;      // 60s for normal operations
@@ -17,47 +17,24 @@ export class GitManager {
 
   /**
    * H3 FIX: All git operations now have a timeout.
-   * H9 FIX: On Windows, uses shell: true for commands that may be .bat/.cmd wrappers.
+   * Centralised via src/shell.js — handles Windows shell, arg validation, quoting.
    */
   async run(args, opts = {}) {
-    // HIGH-2 FIX: Validate git arguments when shell: true will be used on Windows.
-    // Git args come from internal code (not LLM), but defence-in-depth applies.
+    // HIGH-2 / SEC-005 FIX: On Windows, reject args containing quote chars
+    // to prevent quoting bypass. Additional to shell.js SAFE_ARG_RE validation.
     if (process.platform === 'win32') {
-      // P1-004 FIX: Removed * (glob wildcard) from allowed characters
-      // SEC-005 FIX: Args with spaces are allowed but go through the quoting logic
-      // below. Reject args containing quote chars to prevent Windows quoting bypass.
-      // A3-003 FIX: Removed unused SAFE_ARG_RE — only SAFE_SPACED_RE is checked.
-      const SAFE_SPACED_RE = /^[a-zA-Z0-9:_\-/.=^~@ ]+$/;
       for (const arg of args) {
         if (arg.includes('"') || arg.includes("'") || arg.includes('`')) {
           return { ok: false, stdout: '', stderr: `Blocked unsafe git argument (contains quotes): ${arg}` };
         }
-        if (!SAFE_SPACED_RE.test(arg)) {
-          return { ok: false, stdout: '', stderr: `Blocked unsafe git argument: ${arg}` };
-        }
       }
     }
     const timeout = opts.timeout || DEFAULT_TIMEOUT;
-    const execOpts = {
+    return execCommand('git', args, {
       cwd: this.cwd,
       timeout,
-      ...opts,
-    };
-    // H9 FIX: On Windows, enable shell mode for git to handle .bat/.cmd wrappers
-    if (process.platform === 'win32' && !execOpts.shell) {
-      execOpts.shell = true;
-    }
-    // H9 BUGFIX: When shell: true, execa passes args through the shell which
-    // splits on spaces. Quote any arg that contains spaces but isn't already quoted.
-    const finalArgs = execOpts.shell
-      ? args.map(a => (a.includes(' ') && !(/^["'].*["']$/.test(a)) ? `"${a}"` : a))
-      : args;
-    try {
-      const result = await execa('git', finalArgs, execOpts);
-      return { ok: true, stdout: result.stdout, stderr: result.stderr };
-    } catch (err) {
-      return { ok: false, stdout: '', stderr: err.stderr || err.message, error: err };
-    }
+      useProcessEnv: true,
+    });
   }
 
   async isGitRepo() {

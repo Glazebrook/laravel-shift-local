@@ -66,6 +66,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync, rmSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
+import { StateError } from './errors.js';
 
 // FINDING-15 FIX: Named constants for magic numbers
 const MANIFEST_CAP = 500;           // Max entries per manifest array
@@ -212,7 +213,7 @@ export class StateManager {
           // .tmp is also corrupt — fall through to original error
         }
       }
-      throw new Error(`Failed to load shift state: ${err.message}`);
+      throw new StateError(`Failed to load shift state: ${err.message}`, { method: 'load' });
     }
   }
 
@@ -288,7 +289,7 @@ export class StateManager {
   // AUDIT FIX: Guard against use before init()/load()
   _requireState() {
     if (!this.state) {
-      throw new Error('StateManager not initialised. Call init() or load() first.');
+      throw new StateError('StateManager not initialised. Call init() or load() first.', { method: '_requireState' });
     }
   }
 
@@ -301,6 +302,18 @@ export class StateManager {
     this._requireState();
     this.state[key] = value;
     this.save();
+  }
+
+  setTokenUsage(agentName, usage) {
+    this._requireState();
+    if (!this.state.tokenUsage) this.state.tokenUsage = {};
+    this.state.tokenUsage[agentName] = usage;
+    this.save();
+  }
+
+  getTokenUsage() {
+    this._requireState();
+    return this.state.tokenUsage || {};
   }
 
   setPhase(phase) {
@@ -464,14 +477,14 @@ export class StateManager {
     const required = ['fromVersion', 'toVersion', 'currentPhase', 'completedPhases', 'transformations'];
     for (const key of required) {
       if (this.state[key] === undefined) {
-        throw new Error(`Corrupted state: missing required field '${key}'. Run 'shift reset' and start again.`);
+        throw new StateError(`Corrupted state: missing required field '${key}'. Run 'shift reset' and start again.`, { method: 'validateState' });
       }
     }
     if (!Array.isArray(this.state.completedPhases)) {
-      throw new Error(`Corrupted state: 'completedPhases' is not an array. Run 'shift reset' and start again.`);
+      throw new StateError(`Corrupted state: 'completedPhases' is not an array. Run 'shift reset' and start again.`, { method: 'validateState' });
     }
     if (typeof this.state.transformations !== 'object' || this.state.transformations === null) {
-      throw new Error(`Corrupted state: 'transformations' is not an object. Run 'shift reset' and start again.`);
+      throw new StateError(`Corrupted state: 'transformations' is not an object. Run 'shift reset' and start again.`, { method: 'validateState' });
     }
   }
 

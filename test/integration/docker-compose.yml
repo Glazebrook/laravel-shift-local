@@ -1,0 +1,10 @@
+services:
+  integration:
+    build:
+      context: ../..
+      dockerfile: test/integration/Dockerfile
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - SHIFT_TEST_MODE=true
+    volumes:
+      - ../../test/fixtures:/app/test/fixtures
