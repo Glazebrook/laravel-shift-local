@@ -148,3 +148,42 @@ describe('Pipeline Integration — Config Defaults', () => {
     assert.ok(names.includes('declare-strict'));
   });
 });
+
+// ─── L11 Structural Migration Prompts ──────────────────────────
+describe('L11 Structural Migration — Agent Prompts', () => {
+  it('planner system prompt includes L11 structural migration section', async () => {
+    // Read the source file to verify the prompt content
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const source = readFileSync(join(import.meta.dirname, '..', 'src', 'agents', 'planner-agent.js'), 'utf-8');
+
+    assert.ok(source.includes('Laravel 11+ Structural Migration (REQUIRED'));
+    assert.ok(source.includes('REMOVE app/Http/Kernel.php'));
+    assert.ok(source.includes('REMOVE app/Console/Kernel.php'));
+    assert.ok(source.includes('REMOVE app/Exceptions/Handler.php'));
+    assert.ok(source.includes('REWRITE bootstrap/app.php'));
+    assert.ok(source.includes('CREATE bootstrap/providers.php'));
+    assert.ok(source.includes('delete_file'));
+  });
+
+  it('transformer system prompt includes L11 structural migration guidance', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const source = readFileSync(join(import.meta.dirname, '..', 'src', 'agents', 'transformer-agent.js'), 'utf-8');
+
+    assert.ok(source.includes('Laravel 11+ structural migration'));
+    assert.ok(source.includes('Verify custom code has been migrated BEFORE deleting'));
+    assert.ok(source.includes('withMiddleware()'));
+    assert.ok(source.includes('withExceptions()'));
+    assert.ok(source.includes('bootstrap/providers.php'));
+  });
+
+  it('transformer prompt still instructs delete_file for removed files', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const source = readFileSync(join(import.meta.dirname, '..', 'src', 'agents', 'transformer-agent.js'), 'utf-8');
+
+    assert.ok(source.includes('use the delete_file tool to delete it'));
+    assert.ok(source.includes('Do NOT replace the file contents with a comment'));
+  });
+});

@@ -272,6 +272,13 @@ Rules:
 
 When a file should be REMOVED in the target Laravel version (e.g., config/cors.php, app/Http/Kernel.php, removed middleware files, removed service providers), use the delete_file tool to delete it. Do NOT replace the file contents with a comment saying it should be deleted — this breaks Laravel's config loading and leaves dead code. Always use delete_file for removed files. Always use write_file for modified files.
 
+For Laravel 11+ structural migration:
+- Verify custom code has been migrated BEFORE deleting source files
+- If unsure whether custom code exists, read the file first
+- Kernel.php middleware must be migrated to bootstrap/app.php withMiddleware() before deletion
+- Exception handlers must be migrated to bootstrap/app.php withExceptions() before deletion
+- Custom service providers must be listed in bootstrap/providers.php before removing provider files
+
 After transformation, output JSON:
 {
   "ok": true,
