@@ -384,6 +384,126 @@ describe('Orchestrator._ensureGitignore', () => {
   });
 });
 
+// ── Non-Laravel project detection ──────────────────────────────
+
+describe('E2E-3: Non-Laravel project detection', () => {
+  let tempDir;
+
+  beforeEach(() => {
+    tempDir = makeTempDir();
+    mkdirSync(join(tempDir, '.shift'), { recursive: true });
+  });
+  afterEach(() => cleanDir(tempDir));
+
+  it('passes pre-flight with laravel/framework in require', async () => {
+    writeFileSync(join(tempDir, 'composer.json'), JSON.stringify({
+      require: { 'laravel/framework': '^10.0' },
+    }));
+    writeFileSync(join(tempDir, 'artisan'), '#!/usr/bin/env php');
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({
+      projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {},
+    });
+    // _preflightChecks will throw on git/api key, but NOT on Laravel detection
+    try {
+      await orch._preflightChecks();
+    } catch (err) {
+      // Should fail on git or API key, not on Laravel detection
+      assert.ok(!err.message.includes('not a Laravel project'), `Should pass Laravel detection but got: ${err.message}`);
+      assert.ok(!err.message.includes('laravel/framework'), `Should pass Laravel detection but got: ${err.message}`);
+    }
+    orch._removeSignalHandlers();
+    sm.destroy();
+  });
+
+  it('fails without composer.json', async () => {
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({
+      projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {},
+    });
+    try {
+      await assert.rejects(orch._preflightChecks(), (err) => {
+        assert.ok(err.message.includes('composer.json') || err.message.includes('Laravel'));
+        return true;
+      });
+    } finally {
+      orch._cleanup();
+      sm.destroy();
+    }
+  });
+
+  it('fails without laravel/framework dependency', async () => {
+    writeFileSync(join(tempDir, 'composer.json'), JSON.stringify({
+      require: { 'symfony/console': '^6.0' },
+    }));
+    writeFileSync(join(tempDir, 'artisan'), '#!/usr/bin/env php');
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({
+      projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {},
+    });
+    try {
+      await assert.rejects(orch._preflightChecks(), (err) => {
+        assert.ok(err.message.includes('laravel/framework'));
+        return true;
+      });
+    } finally {
+      orch._cleanup();
+      sm.destroy();
+    }
+  });
+
+  it('fails without artisan file', async () => {
+    writeFileSync(join(tempDir, 'composer.json'), JSON.stringify({
+      require: { 'laravel/framework': '^10.0' },
+    }));
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({
+      projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {},
+    });
+    try {
+      await assert.rejects(orch._preflightChecks(), (err) => {
+        assert.ok(err.message.includes('artisan'));
+        return true;
+      });
+    } finally {
+      orch._cleanup();
+      sm.destroy();
+    }
+  });
+
+  it('error message includes clear description', async () => {
+    writeFileSync(join(tempDir, 'composer.json'), JSON.stringify({ require: {} }));
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({
+      projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {},
+    });
+    try {
+      await assert.rejects(orch._preflightChecks(), (err) => {
+        assert.ok(err.message.includes('Laravel project') || err.message.includes('laravel/framework'));
+        return true;
+      });
+    } finally {
+      orch._cleanup();
+      sm.destroy();
+    }
+  });
+});
+
 // ── Post-transform safety checks ──────────────────────────────
 
 describe('E2E-2: postTransformChecks()', () => {

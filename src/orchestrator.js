@@ -465,6 +465,31 @@ export class Orchestrator {
   async _preflightChecks() {
     await this.logger.info('Orchestrator', 'Running pre-flight checks...');
 
+    // Laravel project detection — runs before lock/git/API checks to fail fast
+    // and avoid wasting resources on non-Laravel projects
+    if (!this.fileTools.fileExists('composer.json')) {
+      throw new ShiftError('SHIFT_ERR_NOT_LARAVEL',
+        'No composer.json found. This does not appear to be a PHP/Laravel project.');
+    }
+
+    try {
+      const composerJson = JSON.parse(readFileSync(join(this.projectPath, 'composer.json'), 'utf-8'));
+      const requires = { ...composerJson.require, ...composerJson['require-dev'] };
+      if (!requires['laravel/framework']) {
+        throw new ShiftError('SHIFT_ERR_NOT_LARAVEL',
+          'composer.json does not require laravel/framework. This does not appear to be a Laravel project.');
+      }
+    } catch (err) {
+      if (err.code === 'SHIFT_ERR_NOT_LARAVEL' || err instanceof ShiftError) throw err;
+      throw new ShiftError('SHIFT_ERR_NOT_LARAVEL',
+        `Failed to parse composer.json: ${err.message}`);
+    }
+
+    if (!existsSync(join(this.projectPath, 'artisan'))) {
+      throw new ShiftError('SHIFT_ERR_NOT_LARAVEL',
+        'No artisan file found. This does not appear to be a Laravel project.');
+    }
+
     // C3 FIX: Atomic lock file
     this._acquireLock();
 
@@ -476,11 +501,6 @@ export class Orchestrator {
     // Anthropic API key
     if (!process.env.ANTHROPIC_API_KEY) {
       throw new Error('ANTHROPIC_API_KEY environment variable not set');
-    }
-
-    // composer.json exists
-    if (!this.fileTools.fileExists('composer.json')) {
-      throw new Error('composer.json not found — is this a Laravel project?');
     }
 
     // H9 FIX: Check binaries with Windows shell support
