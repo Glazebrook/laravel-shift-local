@@ -789,4 +789,34 @@ describe('E2E-2: Bootstrap cache clearing (validator)', () => {
     assert.ok(!existsSync(join(cacheDir, 'packages.php')));
     assert.ok(!existsSync(join(cacheDir, 'services.php')));
   });
+
+  it('orchestrator has _postDependencyCleanup method', async () => {
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    assert.equal(typeof Orchestrator.prototype._postDependencyCleanup, 'function');
+  });
+
+  it('_runDependencies calls _postDependencyCleanup', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join: pathJoin } = await import('node:path');
+    const source = readFileSync(pathJoin(import.meta.dirname, '..', 'src', 'orchestrator.js'), 'utf-8');
+    // Verify the cleanup is called within _runDependencies
+    const depMethod = source.slice(
+      source.indexOf('async _runDependencies()'),
+      source.indexOf('async _postDependencyCleanup()')
+    );
+    assert.ok(depMethod.includes('_postDependencyCleanup()'));
+  });
+
+  it('_postDependencyCleanup includes dump-autoload and package:discover', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join: pathJoin } = await import('node:path');
+    const source = readFileSync(pathJoin(import.meta.dirname, '..', 'src', 'orchestrator.js'), 'utf-8');
+    const method = source.slice(
+      source.indexOf('async _postDependencyCleanup()'),
+      source.indexOf('}', source.indexOf('package:discover skipped') + 50)
+    );
+    assert.ok(method.includes('dump-autoload'));
+    assert.ok(method.includes('package:discover'));
+    assert.ok(method.includes('bootstrap'));
+  });
 });

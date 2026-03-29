@@ -22,7 +22,7 @@ import { ValidatorAgent } from './agents/validator-agent.js';
 import { ReporterAgent } from './agents/reporter-agent.js';
 
 import { ShiftBaseError } from './errors.js';
-import { execCommandSync } from './shell.js';
+import { execCommand, execCommandSync } from './shell.js';
 // L1 FIX: Use shared sleep utility instead of duplicating
 import { sleep } from './utils.js';
 import { runPreProcessing, generatePreProcessingSummary } from './pre-processor.js';
