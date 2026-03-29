@@ -59,8 +59,10 @@ describe('Orchestrator lock management', () => {
     orch._acquireLock();
     const lockPath = join(tempDir, '.shift', 'lock');
     assert.ok(existsSync(lockPath), 'Lock file should exist');
-    const pid = readFileSync(lockPath, 'utf8').trim();
-    assert.equal(pid, String(process.pid));
+    const lockData = JSON.parse(readFileSync(lockPath, 'utf8'));
+    assert.equal(lockData.pid, process.pid);
+    assert.ok(lockData.createdAt, 'Lock should have createdAt timestamp');
+    assert.ok(lockData.hostname, 'Lock should have hostname');
 
     // Cleanup
     orch._releaseLock();
@@ -77,7 +79,7 @@ describe('Orchestrator lock management', () => {
 
     const lockPath = join(tempDir, '.shift', 'lock');
     // Write current PID (simulates another active lock by this process)
-    writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString(), hostname: 'test' }), { flag: 'wx' });
 
     const orch = new Orchestrator({
       projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {},
@@ -103,7 +105,7 @@ describe('Orchestrator lock management', () => {
 
     const lockPath = join(tempDir, '.shift', 'lock');
     // Write a PID that doesn't exist (99999999)
-    writeFileSync(lockPath, '99999999', { flag: 'wx' });
+    writeFileSync(lockPath, JSON.stringify({ pid: 99999999, createdAt: new Date().toISOString(), hostname: 'test' }), { flag: 'wx' });
 
     const orch = new Orchestrator({
       projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {},
@@ -111,11 +113,117 @@ describe('Orchestrator lock management', () => {
 
     // Should recover the stale lock
     orch._acquireLock();
-    const pid = readFileSync(lockPath, 'utf8').trim();
-    assert.equal(pid, String(process.pid));
+    const lockData = JSON.parse(readFileSync(lockPath, 'utf8'));
+    assert.equal(lockData.pid, process.pid);
 
     orch._releaseLock();
     orch._removeSignalHandlers();
+    sm.destroy();
+  });
+});
+
+// ── Enhanced lock file tests (E2E-4) ────────────────────────────
+
+describe('E2E-4: Stale lock file detection', () => {
+  let tempDir;
+
+  beforeEach(() => {
+    tempDir = makeTempDir();
+    mkdirSync(join(tempDir, '.shift'), { recursive: true });
+    writeFileSync(join(tempDir, 'composer.json'), '{}');
+  });
+  afterEach(() => cleanDir(tempDir));
+
+  it('lock file with dead PID is auto-removed (Unix)', async () => {
+    if (process.platform === 'win32') return;
+    const lockPath = join(tempDir, '.shift', 'lock');
+    writeFileSync(lockPath, JSON.stringify({ pid: 99999999, createdAt: new Date().toISOString(), hostname: 'test' }), { flag: 'wx' });
+
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({ projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {} });
+
+    orch._acquireLock();
+    const lockData = JSON.parse(readFileSync(lockPath, 'utf8'));
+    assert.equal(lockData.pid, process.pid);
+
+    orch._releaseLock();
+    orch._removeSignalHandlers();
+    sm.destroy();
+  });
+
+  it('corrupted lock file (invalid JSON) is auto-removed', async () => {
+    const lockPath = join(tempDir, '.shift', 'lock');
+    writeFileSync(lockPath, 'this is not json or a pid', { flag: 'wx' });
+
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({ projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {} });
+
+    orch._acquireLock();
+    const lockData = JSON.parse(readFileSync(lockPath, 'utf8'));
+    assert.equal(lockData.pid, process.pid);
+
+    orch._releaseLock();
+    orch._removeSignalHandlers();
+    sm.destroy();
+  });
+
+  it('legacy lock file (plain PID, dead process) is auto-removed', async () => {
+    if (process.platform === 'win32') return;
+    const lockPath = join(tempDir, '.shift', 'lock');
+    writeFileSync(lockPath, '99999999', { flag: 'wx' });
+
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({ projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {} });
+
+    orch._acquireLock();
+    assert.ok(existsSync(lockPath));
+
+    orch._releaseLock();
+    orch._removeSignalHandlers();
+    sm.destroy();
+  });
+
+  it('lock file created with correct PID, timestamp, and hostname', async () => {
+    const lockPath = join(tempDir, '.shift', 'lock');
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({ projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {} });
+
+    orch._acquireLock();
+    const lockData = JSON.parse(readFileSync(lockPath, 'utf8'));
+    assert.equal(lockData.pid, process.pid);
+    assert.ok(lockData.createdAt);
+    assert.ok(new Date(lockData.createdAt).getTime() > 0);
+    assert.ok(lockData.hostname);
+
+    orch._releaseLock();
+    orch._removeSignalHandlers();
+    sm.destroy();
+  });
+
+  it('lock file cleaned up on normal process exit', async () => {
+    const lockPath = join(tempDir, '.shift', 'lock');
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({ projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {} });
+
+    orch._acquireLock();
+    assert.ok(existsSync(lockPath));
+    orch._cleanup();
+    assert.ok(!existsSync(lockPath), 'Lock should be cleaned up');
     sm.destroy();
   });
 });

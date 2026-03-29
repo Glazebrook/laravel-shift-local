@@ -12,6 +12,7 @@ import { PHASES } from './state-manager.js';
 import { GitManager } from './git-manager.js';
 import { FileTools } from './file-tools.js';
 import { existsSync, writeFileSync, unlinkSync, readFileSync, mkdirSync, statSync, utimesSync, readdirSync, copyFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { AnalyzerAgent } from './agents/analyzer-agent.js';
 import { PlannerAgent } from './agents/planner-agent.js';
@@ -35,6 +36,7 @@ const MAX_PHASE_RETRIES = 3;
 
 // FINDING-15 FIX: Named constants for magic numbers
 const STALE_LOCK_MS_WIN = 600_000;               // H5 FIX: 10 min on Windows (2× heartbeat interval)
+const LEGACY_LOCK_STALE_MS = 3_600_000;          // 1 hour — threshold for locks without PID (legacy format)
 const CI_HEARTBEAT_INTERVAL_MS = 60_000;         // 60s between CI heartbeats
 const LOCK_HEARTBEAT_INTERVAL_MS = 300_000;      // 5 min between lock file touches
 
@@ -577,24 +579,50 @@ export class Orchestrator {
       mkdirSync(lockDir, { recursive: true });
     }
 
+    const lockContent = JSON.stringify({
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      hostname: hostname(),
+    });
+
     try {
       // C3 FIX: 'wx' flag = exclusive create, atomic on all platforms
-      writeFileSync(this._lockPath, String(process.pid), { flag: 'wx' });
+      writeFileSync(this._lockPath, lockContent, { flag: 'wx' });
     } catch (err) {
       if (err.code === 'EEXIST') {
-        // Lock file exists — check if the PID is stale
+        // Lock file exists — check if stale
         let stale = false;
         try {
-          const lockPid = parseInt(readFileSync(this._lockPath, 'utf8').trim(), 10);
-          // REL-4 FIX: On Windows, process.kill(pid, 0) is unreliable (permission errors,
-          // PID recycling). Use lock file age as a heuristic instead.
-          if (process.platform === 'win32') {
-            const lockAge = Date.now() - statSync(this._lockPath).mtimeMs;
-            // H5 FIX: 10 minutes (2× heartbeat) instead of 1 hour. Users no longer
-            // need to wait 55+ minutes after a crash on Windows.
-            stale = lockAge > STALE_LOCK_MS_WIN;
-          } else {
-            try { process.kill(lockPid, 0); } catch { stale = true; }
+          const raw = readFileSync(this._lockPath, 'utf8').trim();
+          let lockData;
+          try {
+            lockData = JSON.parse(raw);
+          } catch {
+            // Could be legacy format (plain PID) or corrupted
+            const lockPid = parseInt(raw, 10);
+            if (!isNaN(lockPid)) {
+              lockData = { pid: lockPid };
+            } else {
+              // Corrupted lock file — treat as stale
+              stale = true;
+            }
+          }
+
+          if (lockData && !stale) {
+            const pid = lockData.pid;
+
+            if (process.platform === 'win32') {
+              // REL-4 FIX: On Windows, process.kill(pid, 0) is unreliable.
+              // Use lock file age as a heuristic instead.
+              const lockAge = Date.now() - statSync(this._lockPath).mtimeMs;
+              stale = lockAge > STALE_LOCK_MS_WIN;
+            } else if (pid) {
+              try { process.kill(pid, 0); } catch { stale = true; }
+            } else {
+              // No PID in lock data (legacy format without PID)
+              const lockAge = Date.now() - statSync(this._lockPath).mtimeMs;
+              stale = lockAge > LEGACY_LOCK_STALE_MS;
+            }
           }
         } catch { stale = true; }
 
@@ -605,8 +633,6 @@ export class Orchestrator {
           );
         }
         // Stale lock — remove and re-acquire
-        // C4 FIX: Surface unlinkSync errors other than ENOENT (e.g. EACCES means
-        // a real permission problem, not a race condition).
         try { unlinkSync(this._lockPath); } catch (unlinkErr) {
           if (unlinkErr.code !== 'ENOENT') {
             throw new ShiftError('SHIFT_ERR_LOCK_CLEANUP',
@@ -614,7 +640,7 @@ export class Orchestrator {
           }
         }
         try {
-          writeFileSync(this._lockPath, String(process.pid), { flag: 'wx' });
+          writeFileSync(this._lockPath, lockContent, { flag: 'wx' });
         } catch (retryErr) {
           if (retryErr.code === 'EEXIST') {
             throw new ShiftError('SHIFT_ERR_LOCK_HELD',
