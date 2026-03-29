@@ -26,6 +26,7 @@ import { execCommand, execCommandSync } from './shell.js';
 // L1 FIX: Use shared sleep utility instead of duplicating
 import { sleep } from './utils.js';
 import { runPreProcessing, generatePreProcessingSummary } from './pre-processor.js';
+import { checkConformity, generateConformitySummary } from './conformity-checker.js';
 import { runStyleFormatting } from './style-formatter.js';
 import { loadManifest, getTransitionChain, getAggregatedComposerChanges } from './reference-data.js';
 import { formatGuideForPlanner } from './upgrade-guide.js';
@@ -272,6 +273,7 @@ export class Orchestrator {
     // ── Phase loop ────────────────────────────────────────────
     const phases = [
       { id: PHASES.ANALYZING, fn: () => this._runAnalysis() },
+      { id: 'CONFORMITY_CHECK', fn: () => this._runConformityCheck(), skipInDryRun: false },
       { id: 'PRE_PROCESSING', fn: () => this._runPreProcessing(), skipInDryRun: false },
       { id: PHASES.PLANNING, fn: () => this._runPlanning() },
       { id: PHASES.DEPENDENCIES, fn: () => this._runDependencies(), skipInDryRun: true },
@@ -782,6 +784,62 @@ export class Orchestrator {
     await this._phaseCommit('analysis', `${analysis.upgradeComplexity} complexity`);
   }
 
+  // ─── Conformity Check ──────────────────────────────────────
+
+  async _runConformityCheck() {
+    const s = this.state.get();
+    const conformityConfig = this.config.conformityCheck || {};
+
+    if (conformityConfig.enabled === false) {
+      await this.logger.info('Orchestrator', 'Conformity check disabled via config');
+      this.state.set('conformityReport', null);
+      return;
+    }
+
+    await this.logger.phase('CONFORMITY CHECK: Version Debt Analysis');
+
+    const report = await checkConformity(
+      this.projectPath,
+      s.fromVersion,
+      {
+        autoFix: conformityConfig.autoFix !== false,
+        skipChecks: conformityConfig.skip || [],
+      }
+    );
+
+    this.state.set('conformityReport', report);
+
+    if (report.issues.length > 0) {
+      await this.logger.warn('Orchestrator',
+        `Found ${report.issues.length} conformity issue(s) (debt score: ${report.debtScore}/100)`);
+
+      if (report.actualConformity) {
+        await this.logger.warn('Orchestrator',
+          `Project structure resembles Laravel ${report.actualConformity}, not ${s.fromVersion} as declared`);
+      }
+
+      if (report.fixes.length > 0) {
+        await this.logger.info('Orchestrator',
+          `Auto-fixed ${report.fixes.length} issue(s)`);
+        await this._phaseCommit('conformity', `${report.fixes.length} structural issues resolved`);
+      }
+
+      // Fail on critical issues if configured (default: true)
+      if (conformityConfig.failOnCritical !== false) {
+        const criticalIssues = report.issues.filter(i => i.severity === 'critical');
+        if (criticalIssues.length > 0) {
+          const details = criticalIssues.map(i => `  - ${i.file}: ${i.issue}`).join('\n');
+          throw new Error(
+            `Critical conformity issues found (${criticalIssues.length}):\n${details}\n` +
+            'Fix these before upgrading, or set conformityCheck.failOnCritical: false in .shiftrc.'
+          );
+        }
+      }
+    } else {
+      await this.logger.info('Orchestrator', 'Conformity check passed — project matches declared version');
+    }
+  }
+
   // ─── Pre-Processing (deterministic transforms) ──────────────
 
   async _runPreProcessing() {
@@ -858,6 +916,7 @@ export class Orchestrator {
       composerChanges: getAggregatedComposerChanges(s.fromVersion, s.toVersion),
       upgradeGuide: formatGuideForPlanner(s.toVersion),
       preProcessingSummary: generatePreProcessingSummary(s.preProcessingResult),
+      conformitySummary: s.conformityReport ? generateConformitySummary(s.conformityReport) : null,
     };
 
     const plan = await this.agents.planner.plan(s.analysis, s.fromVersion, s.toVersion, completedFiles, referenceContext);

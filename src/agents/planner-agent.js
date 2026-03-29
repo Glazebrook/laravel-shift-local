@@ -75,6 +75,11 @@ Use this as ground truth for what changed between skeleton versions.`;
       preProcessingSection = `\n\nPRE-PROCESSING REPORT:\n${referenceContext.preProcessingSummary}`;
     }
 
+    let conformitySection = '';
+    if (referenceContext.conformitySummary) {
+      conformitySection = `\n\n${referenceContext.conformitySummary}\n\nAccount for these conformity gaps when planning the upgrade. The project may need additional changes beyond what a standard ${fromVersion}→${toVersion} upgrade requires.`;
+    }
+
     const systemPrompt = `You are a senior Laravel architect creating a precise, ordered upgrade execution plan.
 
 You have authoritative data sources for this upgrade. Use them as your PRIMARY sources.
@@ -85,7 +90,7 @@ ${breakingSection}
 
 Additional upgrade hints:
 ${matrixHints.map(h => `- ${h}`).join('\n')}
-${referenceSection}${guideSection}${preProcessingSection}
+${referenceSection}${guideSection}${preProcessingSection}${conformitySection}
 
 ## Laravel 11+ Structural Migration — ALREADY HANDLED
 

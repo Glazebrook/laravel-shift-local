@@ -52,6 +52,15 @@ describe('Pipeline Integration — Module Imports', () => {
     assert.equal(typeof mod.generateRouteReport, 'function');
   });
 
+  it('conformity-checker exports all expected functions', async () => {
+    const mod = await import('../src/conformity-checker.js');
+    assert.equal(typeof mod.checkConformity, 'function');
+    assert.equal(typeof mod.calculateDebtScore, 'function');
+    assert.equal(typeof mod.determineActualVersion, 'function');
+    assert.equal(typeof mod.generateConformitySummary, 'function');
+    assert.equal(typeof mod.generateConformityReportSection, 'function');
+  });
+
   it('transform registry exports all expected functions', async () => {
     const mod = await import('../src/transforms/index.js');
     assert.equal(typeof mod.getApplicableTransforms, 'function');

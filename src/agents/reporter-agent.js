@@ -9,6 +9,7 @@ import { join } from 'node:path';
 
 import { generateStyleReport } from '../style-formatter.js';
 import { generateRouteReport } from '../route-checker.js';
+import { generateConformityReportSection } from '../conformity-checker.js';
 
 export class ReporterAgent extends BaseAgent {
   constructor(deps) {
@@ -126,6 +127,7 @@ Return the structured JSON now.`,
       fromVersion, toVersion, branchName, transformations, validation,
       gitLog, phaseTimings: phaseTimings || {}, tokenUsage: tokenUsage || {},
       preProcessingResult: state.preProcessingResult,
+      conformityReport: state.conformityReport,
       styleResult: state.styleResult,
       routeCheck: validation?.routeCheck,
       blueprint: state.blueprint,
@@ -160,7 +162,7 @@ Return the structured JSON now.`,
 
   _renderReport(data, context) {
     const { fromVersion, toVersion, branchName, transformations, validation, gitLog, phaseTimings, tokenUsage,
-      preProcessingResult, styleResult, routeCheck, blueprint } = context;
+      preProcessingResult, conformityReport, styleResult, routeCheck, blueprint } = context;
 
     // M3 FIX: Calculate total duration
     const totalMs = Object.values(phaseTimings).reduce((sum, t) => sum + (t.durationMs || 0), 0);
@@ -210,6 +212,11 @@ Return the structured JSON now.`,
         md += `| ${agent} | ${inp.toLocaleString()} | ${out.toLocaleString()} | ${calls} |\n`;
       }
       md += `| **Total** | **${totalInput.toLocaleString()}** | **${totalOutput.toLocaleString()}** | **${totalCalls}** |\n\n`;
+    }
+
+    // Version Conformity Check
+    if (conformityReport && conformityReport.issues.length > 0) {
+      md += generateConformityReportSection(conformityReport);
     }
 
     // Pre-Processing Summary
