@@ -45,7 +45,7 @@ export default {
   detect(content) {
     // Match $faker->property or $this->faker->property (not followed by "(")
     const props = FAKER_PROPERTIES.join('|');
-    const regex = new RegExp(`\\$(?:faker|this->faker)->(?:${props})(?!\\s*\\()`, 'm');
+    const regex = new RegExp(`\\$(?:faker|this->faker)->(?:${props})\\b(?!\\s*\\()`, 'm');
     return regex.test(content);
   },
 
@@ -57,7 +57,7 @@ export default {
     let count = 0;
     const props = FAKER_PROPERTIES.join('|');
     const regex = new RegExp(
-      `(\\$(?:faker|this->faker)->)(${props})(?!\\s*\\()`,
+      `(\\$(?:faker|this->faker)->)(${props})\\b(?!\\s*\\()`,
       'g'
     );
 

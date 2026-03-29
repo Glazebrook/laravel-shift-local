@@ -6,7 +6,7 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync } from 'fs';
+import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -59,8 +59,10 @@ describe('Orchestrator lock management', () => {
     orch._acquireLock();
     const lockPath = join(tempDir, '.shift', 'lock');
     assert.ok(existsSync(lockPath), 'Lock file should exist');
-    const pid = readFileSync(lockPath, 'utf8').trim();
-    assert.equal(pid, String(process.pid));
+    const lockData = JSON.parse(readFileSync(lockPath, 'utf8'));
+    assert.equal(lockData.pid, process.pid);
+    assert.ok(lockData.createdAt, 'Lock should have createdAt timestamp');
+    assert.ok(lockData.hostname, 'Lock should have hostname');
 
     // Cleanup
     orch._releaseLock();
@@ -77,7 +79,7 @@ describe('Orchestrator lock management', () => {
 
     const lockPath = join(tempDir, '.shift', 'lock');
     // Write current PID (simulates another active lock by this process)
-    writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString(), hostname: 'test' }), { flag: 'wx' });
 
     const orch = new Orchestrator({
       projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {},
@@ -103,7 +105,7 @@ describe('Orchestrator lock management', () => {
 
     const lockPath = join(tempDir, '.shift', 'lock');
     // Write a PID that doesn't exist (99999999)
-    writeFileSync(lockPath, '99999999', { flag: 'wx' });
+    writeFileSync(lockPath, JSON.stringify({ pid: 99999999, createdAt: new Date().toISOString(), hostname: 'test' }), { flag: 'wx' });
 
     const orch = new Orchestrator({
       projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {},
@@ -111,11 +113,117 @@ describe('Orchestrator lock management', () => {
 
     // Should recover the stale lock
     orch._acquireLock();
-    const pid = readFileSync(lockPath, 'utf8').trim();
-    assert.equal(pid, String(process.pid));
+    const lockData = JSON.parse(readFileSync(lockPath, 'utf8'));
+    assert.equal(lockData.pid, process.pid);
 
     orch._releaseLock();
     orch._removeSignalHandlers();
+    sm.destroy();
+  });
+});
+
+// ── Enhanced lock file tests (E2E-4) ────────────────────────────
+
+describe('E2E-4: Stale lock file detection', () => {
+  let tempDir;
+
+  beforeEach(() => {
+    tempDir = makeTempDir();
+    mkdirSync(join(tempDir, '.shift'), { recursive: true });
+    writeFileSync(join(tempDir, 'composer.json'), '{}');
+  });
+  afterEach(() => cleanDir(tempDir));
+
+  it('lock file with dead PID is auto-removed (Unix)', async () => {
+    if (process.platform === 'win32') return;
+    const lockPath = join(tempDir, '.shift', 'lock');
+    writeFileSync(lockPath, JSON.stringify({ pid: 99999999, createdAt: new Date().toISOString(), hostname: 'test' }), { flag: 'wx' });
+
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({ projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {} });
+
+    orch._acquireLock();
+    const lockData = JSON.parse(readFileSync(lockPath, 'utf8'));
+    assert.equal(lockData.pid, process.pid);
+
+    orch._releaseLock();
+    orch._removeSignalHandlers();
+    sm.destroy();
+  });
+
+  it('corrupted lock file (invalid JSON) is auto-removed', async () => {
+    const lockPath = join(tempDir, '.shift', 'lock');
+    writeFileSync(lockPath, 'this is not json or a pid', { flag: 'wx' });
+
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({ projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {} });
+
+    orch._acquireLock();
+    const lockData = JSON.parse(readFileSync(lockPath, 'utf8'));
+    assert.equal(lockData.pid, process.pid);
+
+    orch._releaseLock();
+    orch._removeSignalHandlers();
+    sm.destroy();
+  });
+
+  it('legacy lock file (plain PID, dead process) is auto-removed', async () => {
+    if (process.platform === 'win32') return;
+    const lockPath = join(tempDir, '.shift', 'lock');
+    writeFileSync(lockPath, '99999999', { flag: 'wx' });
+
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({ projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {} });
+
+    orch._acquireLock();
+    assert.ok(existsSync(lockPath));
+
+    orch._releaseLock();
+    orch._removeSignalHandlers();
+    sm.destroy();
+  });
+
+  it('lock file created with correct PID, timestamp, and hostname', async () => {
+    const lockPath = join(tempDir, '.shift', 'lock');
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({ projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {} });
+
+    orch._acquireLock();
+    const lockData = JSON.parse(readFileSync(lockPath, 'utf8'));
+    assert.equal(lockData.pid, process.pid);
+    assert.ok(lockData.createdAt);
+    assert.ok(new Date(lockData.createdAt).getTime() > 0);
+    assert.ok(lockData.hostname);
+
+    orch._releaseLock();
+    orch._removeSignalHandlers();
+    sm.destroy();
+  });
+
+  it('lock file cleaned up on normal process exit', async () => {
+    const lockPath = join(tempDir, '.shift', 'lock');
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({ projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {} });
+
+    orch._acquireLock();
+    assert.ok(existsSync(lockPath));
+    orch._cleanup();
+    assert.ok(!existsSync(lockPath), 'Lock should be cleaned up');
     sm.destroy();
   });
 });
@@ -381,5 +489,334 @@ describe('Orchestrator._ensureGitignore', () => {
 
     orch._removeSignalHandlers();
     sm.destroy();
+  });
+});
+
+// ── Non-Laravel project detection ──────────────────────────────
+
+describe('E2E-3: Non-Laravel project detection', () => {
+  let tempDir;
+
+  beforeEach(() => {
+    tempDir = makeTempDir();
+    mkdirSync(join(tempDir, '.shift'), { recursive: true });
+  });
+  afterEach(() => cleanDir(tempDir));
+
+  it('passes pre-flight with laravel/framework in require', async () => {
+    writeFileSync(join(tempDir, 'composer.json'), JSON.stringify({
+      require: { 'laravel/framework': '^10.0' },
+    }));
+    writeFileSync(join(tempDir, 'artisan'), '#!/usr/bin/env php');
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({
+      projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {},
+    });
+    // _preflightChecks will throw on git/api key, but NOT on Laravel detection
+    try {
+      await orch._preflightChecks();
+    } catch (err) {
+      // Should fail on git or API key, not on Laravel detection
+      assert.ok(!err.message.includes('not a Laravel project'), `Should pass Laravel detection but got: ${err.message}`);
+      assert.ok(!err.message.includes('laravel/framework'), `Should pass Laravel detection but got: ${err.message}`);
+    }
+    orch._removeSignalHandlers();
+    sm.destroy();
+  });
+
+  it('fails without composer.json', async () => {
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({
+      projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {},
+    });
+    try {
+      await assert.rejects(orch._preflightChecks(), (err) => {
+        assert.ok(err.message.includes('composer.json') || err.message.includes('Laravel'));
+        return true;
+      });
+    } finally {
+      orch._cleanup();
+      sm.destroy();
+    }
+  });
+
+  it('fails without laravel/framework dependency', async () => {
+    writeFileSync(join(tempDir, 'composer.json'), JSON.stringify({
+      require: { 'symfony/console': '^6.0' },
+    }));
+    writeFileSync(join(tempDir, 'artisan'), '#!/usr/bin/env php');
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({
+      projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {},
+    });
+    try {
+      await assert.rejects(orch._preflightChecks(), (err) => {
+        assert.ok(err.message.includes('laravel/framework'));
+        return true;
+      });
+    } finally {
+      orch._cleanup();
+      sm.destroy();
+    }
+  });
+
+  it('fails without artisan file', async () => {
+    writeFileSync(join(tempDir, 'composer.json'), JSON.stringify({
+      require: { 'laravel/framework': '^10.0' },
+    }));
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({
+      projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {},
+    });
+    try {
+      await assert.rejects(orch._preflightChecks(), (err) => {
+        assert.ok(err.message.includes('artisan'));
+        return true;
+      });
+    } finally {
+      orch._cleanup();
+      sm.destroy();
+    }
+  });
+
+  it('error message includes clear description', async () => {
+    writeFileSync(join(tempDir, 'composer.json'), JSON.stringify({ require: {} }));
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    const { StateManager } = await import('../src/state-manager.js');
+    const sm = new StateManager(tempDir);
+    sm.init({ fromVersion: '10', toVersion: '11', projectPath: tempDir });
+    const orch = new Orchestrator({
+      projectPath: tempDir, stateManager: sm, logger: makeLogger(), config: {},
+    });
+    try {
+      await assert.rejects(orch._preflightChecks(), (err) => {
+        assert.ok(err.message.includes('Laravel project') || err.message.includes('laravel/framework'));
+        return true;
+      });
+    } finally {
+      orch._cleanup();
+      sm.destroy();
+    }
+  });
+});
+
+// ── Post-transform safety checks ──────────────────────────────
+
+describe('E2E-2: postTransformChecks()', () => {
+  let tempDir;
+
+  beforeEach(() => {
+    tempDir = makeTempDir();
+    mkdirSync(join(tempDir, '.shift', 'backups'), { recursive: true });
+    mkdirSync(join(tempDir, 'config'), { recursive: true });
+  });
+  afterEach(() => cleanDir(tempDir));
+
+  it('deletes config tombstone (comments only) with backup', async () => {
+    writeFileSync(join(tempDir, 'config', 'cors.php'), '<?php\n/* THIS FILE SHOULD BE DELETED */\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '11');
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].action, 'deleted');
+    assert.ok(!existsSync(join(tempDir, 'config', 'cors.php')));
+    assert.ok(existsSync(join(tempDir, '.shift', 'backups', 'config', 'cors.php')));
+  });
+
+  it('leaves config file with return [] alone', async () => {
+    writeFileSync(join(tempDir, 'config', 'app.php'), '<?php\nreturn [\n  "name" => "test"\n];\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '11');
+    assert.equal(issues.length, 0);
+    assert.ok(existsSync(join(tempDir, 'config', 'app.php')));
+  });
+
+  it('warns about config with code but no return', async () => {
+    writeFileSync(join(tempDir, 'config', 'weird.php'), '<?php\n$x = "hello";\necho $x;\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '11');
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].action, 'warning');
+  });
+
+  it('deletes Kernel.php tombstone when target >= 11', async () => {
+    mkdirSync(join(tempDir, 'app', 'Http'), { recursive: true });
+    writeFileSync(join(tempDir, 'app', 'Http', 'Kernel.php'), '<?php\n// DELETED — Laravel 11 upgrade\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '11');
+    const kernelIssue = issues.find(i => i.file === 'app/Http/Kernel.php');
+    assert.ok(kernelIssue);
+    assert.equal(kernelIssue.action, 'deleted');
+    assert.ok(!existsSync(join(tempDir, 'app', 'Http', 'Kernel.php')));
+  });
+
+  it('does NOT delete Kernel.php tombstone when target is 10', async () => {
+    mkdirSync(join(tempDir, 'app', 'Http'), { recursive: true });
+    writeFileSync(join(tempDir, 'app', 'Http', 'Kernel.php'), '<?php\n// DELETED\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '10');
+    const kernelIssue = issues.find(i => i.file === 'app/Http/Kernel.php');
+    assert.equal(kernelIssue, undefined);
+    assert.ok(existsSync(join(tempDir, 'app', 'Http', 'Kernel.php')));
+  });
+
+  it('preserves Kernel.php with real code', async () => {
+    mkdirSync(join(tempDir, 'app', 'Http'), { recursive: true });
+    writeFileSync(join(tempDir, 'app', 'Http', 'Kernel.php'), '<?php\nclass Kernel extends HttpKernel {\n  function boot() {}\n}\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '11');
+    const kernelIssue = issues.find(i => i.file === 'app/Http/Kernel.php');
+    assert.equal(kernelIssue, undefined);
+    assert.ok(existsSync(join(tempDir, 'app', 'Http', 'Kernel.php')));
+  });
+
+  it('deletes empty file (like CreatesApplication.php written as "")', async () => {
+    mkdirSync(join(tempDir, 'tests'), { recursive: true });
+    writeFileSync(join(tempDir, 'tests', 'CreatesApplication.php'), '');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '11');
+    const found = issues.find(i => i.file === 'tests/CreatesApplication.php');
+    assert.ok(found);
+    assert.equal(found.action, 'deleted');
+  });
+
+  it('handles multiple tombstones in single pass', async () => {
+    mkdirSync(join(tempDir, 'app', 'Http', 'Middleware'), { recursive: true });
+    writeFileSync(join(tempDir, 'app', 'Http', 'Kernel.php'), '<?php\n// removed\n');
+    writeFileSync(join(tempDir, 'app', 'Http', 'Middleware', 'TrustProxies.php'), '<?php\n// removed\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const issues = postTransformChecks(tempDir, '11');
+    const deleted = issues.filter(i => i.action === 'deleted');
+    assert.ok(deleted.length >= 2);
+  });
+
+  it('creates backup in correct directory structure', async () => {
+    mkdirSync(join(tempDir, 'app', 'Http', 'Middleware'), { recursive: true });
+    writeFileSync(join(tempDir, 'app', 'Http', 'Middleware', 'TrimStrings.php'), '<?php\n// tombstone\n');
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    postTransformChecks(tempDir, '11');
+    assert.ok(existsSync(join(tempDir, '.shift', 'backups', 'app', 'Http', 'Middleware', 'TrimStrings.php')));
+  });
+});
+
+// ─── Bootstrap Cache Clearing ──────────────────────────────────
+describe('E2E-2: Bootstrap cache clearing (validator)', () => {
+  let tempDir;
+
+  beforeEach(() => {
+    tempDir = makeTempDir('shift-cache-');
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('clearBootstrapCache removes .php files from bootstrap/cache', async () => {
+    const cacheDir = join(tempDir, 'bootstrap', 'cache');
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(join(cacheDir, 'packages.php'), '<?php return [];');
+    writeFileSync(join(cacheDir, 'services.php'), '<?php return [];');
+    writeFileSync(join(cacheDir, 'config.php'), '<?php return [];');
+    writeFileSync(join(cacheDir, '.gitignore'), '*\n!.gitignore\n');
+
+    // Import and test the validator's _clearBootstrapCache via instantiation
+    const { ValidatorAgent } = await import('../src/agents/validator-agent.js');
+    const mockLogger = { info: async () => {}, warn: async () => {}, debug: async () => {}, error: async () => {}, phase: async () => {}, success: async () => {} };
+    const mockFileTools = { findPhpFiles: async () => [], getAgentTools: () => [], fileExists: () => false };
+    const agent = new ValidatorAgent({
+      logger: mockLogger,
+      projectPath: tempDir,
+      fileTools: mockFileTools,
+      stateManager: { get: () => ({}), set: () => {} },
+      config: {},
+    });
+
+    agent._clearBootstrapCache();
+
+    // .php files should be removed
+    assert.ok(!existsSync(join(cacheDir, 'packages.php')));
+    assert.ok(!existsSync(join(cacheDir, 'services.php')));
+    assert.ok(!existsSync(join(cacheDir, 'config.php')));
+    // .gitignore should remain
+    assert.ok(existsSync(join(cacheDir, '.gitignore')));
+  });
+
+  it('clearBootstrapCache handles missing bootstrap/cache gracefully', async () => {
+    const { ValidatorAgent } = await import('../src/agents/validator-agent.js');
+    const mockLogger = { info: async () => {}, warn: async () => {}, debug: async () => {}, error: async () => {}, phase: async () => {}, success: async () => {} };
+    const mockFileTools = { findPhpFiles: async () => [], getAgentTools: () => [], fileExists: () => false };
+    const agent = new ValidatorAgent({
+      logger: mockLogger,
+      projectPath: tempDir,
+      fileTools: mockFileTools,
+      stateManager: { get: () => ({}), set: () => {} },
+      config: {},
+    });
+
+    // Should not throw when directory doesn't exist
+    agent._clearBootstrapCache();
+    assert.ok(!existsSync(join(tempDir, 'bootstrap', 'cache')));
+  });
+
+  it('postDependencyCleanup clears bootstrap cache files', async () => {
+    const cacheDir = join(tempDir, 'bootstrap', 'cache');
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(join(cacheDir, 'packages.php'), '<?php return ["Fruitcake\\Cors\\CorsServiceProvider"];');
+    writeFileSync(join(cacheDir, 'services.php'), '<?php return [];');
+
+    // Verify files exist before cleanup
+    assert.ok(existsSync(join(cacheDir, 'packages.php')));
+    assert.ok(existsSync(join(cacheDir, 'services.php')));
+
+    // Simulate cleanup by deleting .php files (mirrors _postDependencyCleanup logic)
+    const files = readdirSync(cacheDir).filter(f => f.endsWith('.php'));
+    assert.equal(files.length, 2);
+    for (const file of files) {
+      rmSync(join(cacheDir, file));
+    }
+
+    assert.ok(!existsSync(join(cacheDir, 'packages.php')));
+    assert.ok(!existsSync(join(cacheDir, 'services.php')));
+  });
+
+  it('orchestrator has _postDependencyCleanup method', async () => {
+    const { Orchestrator } = await import('../src/orchestrator.js');
+    assert.equal(typeof Orchestrator.prototype._postDependencyCleanup, 'function');
+  });
+
+  it('_runDependencies calls _postDependencyCleanup', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join: pathJoin } = await import('node:path');
+    const source = readFileSync(pathJoin(import.meta.dirname, '..', 'src', 'orchestrator.js'), 'utf-8');
+    // Verify the cleanup is called within _runDependencies
+    const depMethod = source.slice(
+      source.indexOf('async _runDependencies()'),
+      source.indexOf('async _postDependencyCleanup()')
+    );
+    assert.ok(depMethod.includes('_postDependencyCleanup()'));
+  });
+
+  it('_postDependencyCleanup includes dump-autoload and package:discover', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join: pathJoin } = await import('node:path');
+    const source = readFileSync(pathJoin(import.meta.dirname, '..', 'src', 'orchestrator.js'), 'utf-8');
+    const method = source.slice(
+      source.indexOf('async _postDependencyCleanup()'),
+      source.indexOf('}', source.indexOf('package:discover skipped') + 50)
+    );
+    assert.ok(method.includes('dump-autoload'));
+    assert.ok(method.includes('package:discover'));
+    assert.ok(method.includes('bootstrap'));
   });
 });

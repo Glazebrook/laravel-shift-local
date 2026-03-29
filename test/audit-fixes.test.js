@@ -12,7 +12,7 @@ import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  BaseAgent, AgentError, _resetSharedClient,
+  BaseAgent, _resetSharedClient,
 } from '../src/agents/base-agent.js';
 
 function makeLogger() {
@@ -363,7 +363,7 @@ describe('AUDIT-2 P3-001: branchPrefix leading slash sanitization', () => {
 import { mkdirSync, rmSync, existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { basename } from 'path';
+
 
 function makeTempDir(prefix = 'shift-audit3-') {
   const dir = join(tmpdir(), prefix + Date.now() + '-' + Math.random().toString(36).slice(2));
@@ -460,7 +460,6 @@ describe('AUDIT-3 P1-002: Logger._flushBuffer writes errors to stderr', () => {
 
 describe('AUDIT-3 P1-004+SEC-005: Git args with quotes rejected', () => {
   it('rejects args containing double quotes', () => {
-    const SAFE_SPACED_RE = /^[a-zA-Z0-9:_\-/.=^~@ ]+$/;
     const arg = 'branch"--inject';
     // The SEC-005 fix explicitly checks for quote chars
     assert.ok(arg.includes('"'), 'Arg contains double quote');
@@ -1405,5 +1404,50 @@ describe('A3-003: Dead code removal — SAFE_ARG_RE removed from git-manager', (
       'validator-agent.js should import execCommand from shell.js');
     assert.ok(!src.includes("import { execa }"),
       'validator-agent.js should no longer directly import execa');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════
+// E2E-5 — Content filter fallback in transformer
+// ══════════════════════════════════════════════════════════════════
+
+describe('E2E-5: Content filter fallback', () => {
+  it('transformer source has content filtering detection', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
+    assert.ok(source.includes('content filtering'), 'Should detect content filtering errors');
+    assert.ok(source.includes('_contentFilterFallback'), 'Should have fallback method');
+  });
+
+  it('transformer handles content filter with fallback flow', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
+    assert.ok(source.includes('minimal_prompt'), 'Should attempt minimal prompt retry');
+    assert.ok(source.includes('getFileChange'), 'Should use reference data fallback');
+    assert.ok(source.includes('Manual upgrade required'), 'Should mark for manual review on failure');
+  });
+
+  it('content filter fallback records contentFilter flag in state', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
+    assert.ok(source.includes('contentFilter: true'), 'Should flag content filter failures in state');
+  });
+
+  it('content filter fallback continues processing remaining files', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
+    assert.ok(source.includes('continue;'), 'Should continue to next file after content filter');
+  });
+
+  it('transformer _contentFilterFallback tries reference data deletion', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
+    assert.ok(source.includes("type === 'removed'"), 'Should check if file should be deleted per reference data');
+    assert.ok(source.includes('delete_file'), 'Should use delete_file for removed files');
   });
 });

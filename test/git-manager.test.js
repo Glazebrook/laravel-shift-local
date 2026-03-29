@@ -196,3 +196,60 @@ describe('GitManager Windows argument validation', () => {
     assert.ok(!SAFE_ARG_RE.test('arg&bg'));
   });
 });
+
+// ── E2E-6: Commit message format ──────────────────────────────
+
+describe('E2E-6: Git commit message compatibility', () => {
+  let tempDir, GitManager;
+
+  beforeEach(async () => {
+    tempDir = makeTempDir();
+    ({ GitManager } = await import('../src/git-manager.js'));
+    execSync('git init', { cwd: tempDir, stdio: 'ignore' });
+    execSync('git config user.email "test@test.com"', { cwd: tempDir, stdio: 'ignore' });
+    execSync('git config user.name "Test"', { cwd: tempDir, stdio: 'ignore' });
+    writeFileSync(join(tempDir, 'initial.txt'), 'init');
+    execSync('git add -A && git commit -m "init"', { cwd: tempDir, stdio: 'ignore', shell: true });
+  });
+  afterEach(() => cleanDir(tempDir));
+
+  it('default commit messages use shift: prefix (no brackets)', async () => {
+    const git = new GitManager(tempDir, makeLogger());
+    assert.equal(git.commitPrefix, 'shift:');
+    writeFileSync(join(tempDir, 'test.txt'), 'test');
+    await git.addAll();
+    const result = await git.commit('analysis: low complexity');
+    assert.ok(result.ok);
+    const log = await git.getLog(1);
+    assert.ok(log.includes('shift: analysis: low complexity'));
+    assert.ok(!log.includes('[shift]'));
+  });
+
+  it('custom commit prefix still works', async () => {
+    const git = new GitManager(tempDir, makeLogger(), { commitPrefix: 'upgrade' });
+    writeFileSync(join(tempDir, 'test.txt'), 'test');
+    await git.addAll();
+    const result = await git.commit('transforms done');
+    assert.ok(result.ok);
+    const log = await git.getLog(1);
+    assert.ok(log.includes('upgrade transforms done'));
+  });
+
+  it('sanitisation regex strips square brackets', () => {
+    let prefix = '[shift]';
+    prefix = prefix.replace(/[^a-zA-Z0-9_: -]/g, '');
+    if (!prefix) prefix = 'shift:';
+    assert.equal(prefix, 'shift');
+    assert.ok(!prefix.includes('['));
+    assert.ok(!prefix.includes(']'));
+  });
+
+  it('git commit succeeds with new prefix format', async () => {
+    const git = new GitManager(tempDir, makeLogger());
+    writeFileSync(join(tempDir, 'file.txt'), 'data');
+    const result = await git.phaseCommit('validation', 'PASSED');
+    assert.ok(result.ok, `Commit should succeed: ${result.stderr}`);
+    const log = await git.getLog(1);
+    assert.ok(log.includes('shift:'));
+  });
+});

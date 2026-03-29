@@ -11,8 +11,9 @@
 import { PHASES } from './state-manager.js';
 import { GitManager } from './git-manager.js';
 import { FileTools } from './file-tools.js';
-import { existsSync, writeFileSync, unlinkSync, readFileSync, mkdirSync, statSync, utimesSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, writeFileSync, unlinkSync, readFileSync, mkdirSync, statSync, utimesSync, readdirSync, copyFileSync } from 'node:fs';
+import { hostname } from 'node:os';
+import { join, dirname, basename } from 'node:path';
 import { AnalyzerAgent } from './agents/analyzer-agent.js';
 import { PlannerAgent } from './agents/planner-agent.js';
 import { DependencyAgent } from './agents/dependency-agent.js';
@@ -21,22 +22,120 @@ import { ValidatorAgent } from './agents/validator-agent.js';
 import { ReporterAgent } from './agents/reporter-agent.js';
 
 import { ShiftBaseError } from './errors.js';
-import { execCommandSync } from './shell.js';
+import { execCommand, execCommandSync } from './shell.js';
 // L1 FIX: Use shared sleep utility instead of duplicating
 import { sleep } from './utils.js';
 import { runPreProcessing, generatePreProcessingSummary } from './pre-processor.js';
-import { runStyleFormatting, generateStyleReport } from './style-formatter.js';
+import { runStyleFormatting } from './style-formatter.js';
 import { loadManifest, getTransitionChain, getAggregatedComposerChanges } from './reference-data.js';
 import { formatGuideForPlanner } from './upgrade-guide.js';
-import { checkRoutes, generateRouteReport } from './route-checker.js';
+import { checkRoutes } from './route-checker.js';
 import { generateBlueprintYaml } from './blueprint-exporter.js';
 
 const MAX_PHASE_RETRIES = 3;
 
 // FINDING-15 FIX: Named constants for magic numbers
 const STALE_LOCK_MS_WIN = 600_000;               // H5 FIX: 10 min on Windows (2× heartbeat interval)
+const LEGACY_LOCK_STALE_MS = 3_600_000;          // 1 hour — threshold for locks without PID (legacy format)
 const CI_HEARTBEAT_INTERVAL_MS = 60_000;         // 60s between CI heartbeats
 const LOCK_HEARTBEAT_INTERVAL_MS = 300_000;      // 5 min between lock file touches
+
+/**
+ * Post-transform safety checks.
+ * Catches common LLM mistakes (tombstone files) before the validator runs.
+ */
+export function postTransformChecks(projectRoot, toVersion) {
+  const issues = [];
+
+  // 1. Config files must return arrays
+  const configDir = join(projectRoot, 'config');
+  if (existsSync(configDir)) {
+    const configFiles = readdirSync(configDir).filter(f => f.endsWith('.php'));
+
+    for (const file of configFiles) {
+      const filePath = join(configDir, file);
+      const content = readFileSync(filePath, 'utf-8');
+
+      const stripped = content
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*/g, '')
+        .trim();
+
+      const hasReturn = /return\s+\[/.test(content) || /return\s+array\s*\(/.test(content);
+
+      if (!hasReturn) {
+        const isOnlyComments = !stripped.replace(/<\?php/i, '').trim();
+
+        if (isOnlyComments || stripped === '<?php' || stripped === '') {
+          const backupDir = join(projectRoot, '.shift', 'backups', 'config');
+          mkdirSync(backupDir, { recursive: true });
+          copyFileSync(filePath, join(backupDir, file));
+          unlinkSync(filePath);
+          issues.push({
+            file: `config/${file}`,
+            action: 'deleted',
+            reason: 'Tombstone config file (no return statement) — would crash Laravel LoadConfiguration',
+          });
+        } else {
+          issues.push({
+            file: `config/${file}`,
+            action: 'warning',
+            reason: 'Config file has code but no array return — may break Laravel boot',
+          });
+        }
+      }
+    }
+  }
+
+  // 2. Structural tombstone cleanup for Laravel 11+ targets
+  if (parseInt(toVersion) >= 11) {
+    const tombstoneCandidates = [
+      'app/Http/Kernel.php',
+      'app/Console/Kernel.php',
+      'app/Exceptions/Handler.php',
+      'app/Providers/RouteServiceProvider.php',
+      'app/Providers/BroadcastServiceProvider.php',
+      'app/Providers/EventServiceProvider.php',
+      'app/Providers/AuthServiceProvider.php',
+      'app/Http/Middleware/Authenticate.php',
+      'app/Http/Middleware/EncryptCookies.php',
+      'app/Http/Middleware/PreventRequestsDuringMaintenance.php',
+      'app/Http/Middleware/RedirectIfAuthenticated.php',
+      'app/Http/Middleware/TrimStrings.php',
+      'app/Http/Middleware/TrustHosts.php',
+      'app/Http/Middleware/TrustProxies.php',
+      'app/Http/Middleware/ValidateSignature.php',
+      'app/Http/Middleware/VerifyCsrfToken.php',
+      'tests/CreatesApplication.php',
+    ];
+
+    for (const relPath of tombstoneCandidates) {
+      const filePath = join(projectRoot, relPath);
+      if (!existsSync(filePath)) continue;
+
+      const content = readFileSync(filePath, 'utf-8');
+      const stripped = content
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*/g, '')
+        .replace(/<\?php/gi, '')
+        .trim();
+
+      if (!stripped || (!stripped.includes('class') && !stripped.includes('function') && !stripped.includes('return'))) {
+        const backupDir = join(projectRoot, '.shift', 'backups', dirname(relPath));
+        mkdirSync(backupDir, { recursive: true });
+        copyFileSync(filePath, join(backupDir, basename(relPath)));
+        unlinkSync(filePath);
+        issues.push({
+          file: relPath,
+          action: 'deleted',
+          reason: `Tombstone file — not used in Laravel ${toVersion}+`,
+        });
+      }
+    }
+  }
+
+  return issues;
+}
 
 /**
  * C1 FIX: ShiftError moved above Orchestrator class.
@@ -177,6 +276,7 @@ export class Orchestrator {
       { id: PHASES.PLANNING, fn: () => this._runPlanning() },
       { id: PHASES.DEPENDENCIES, fn: () => this._runDependencies(), skipInDryRun: true },
       { id: PHASES.TRANSFORMING, fn: () => this._runTransformations(), skipInDryRun: true },
+      { id: 'POST_TRANSFORM_CHECKS', fn: () => this._runPostTransformChecks(), skipInDryRun: true },
       { id: PHASES.VALIDATING, fn: () => this._runValidation(), skipInDryRun: true },
       { id: 'STYLE_FORMATTING', fn: () => this._runStyleFormatting(), skipInDryRun: true },
       // LOW-6 FIX: Skip REPORTING in dry-run mode — the report would show
@@ -367,6 +467,31 @@ export class Orchestrator {
   async _preflightChecks() {
     await this.logger.info('Orchestrator', 'Running pre-flight checks...');
 
+    // Laravel project detection — runs before lock/git/API checks to fail fast
+    // and avoid wasting resources on non-Laravel projects
+    if (!this.fileTools.fileExists('composer.json')) {
+      throw new ShiftError('SHIFT_ERR_NOT_LARAVEL',
+        'No composer.json found. This does not appear to be a PHP/Laravel project.');
+    }
+
+    try {
+      const composerJson = JSON.parse(readFileSync(join(this.projectPath, 'composer.json'), 'utf-8'));
+      const requires = { ...composerJson.require, ...composerJson['require-dev'] };
+      if (!requires['laravel/framework']) {
+        throw new ShiftError('SHIFT_ERR_NOT_LARAVEL',
+          'composer.json does not require laravel/framework. This does not appear to be a Laravel project.');
+      }
+    } catch (err) {
+      if (err.code === 'SHIFT_ERR_NOT_LARAVEL' || err instanceof ShiftError) throw err;
+      throw new ShiftError('SHIFT_ERR_NOT_LARAVEL',
+        `Failed to parse composer.json: ${err.message}`);
+    }
+
+    if (!existsSync(join(this.projectPath, 'artisan'))) {
+      throw new ShiftError('SHIFT_ERR_NOT_LARAVEL',
+        'No artisan file found. This does not appear to be a Laravel project.');
+    }
+
     // C3 FIX: Atomic lock file
     this._acquireLock();
 
@@ -378,11 +503,6 @@ export class Orchestrator {
     // Anthropic API key
     if (!process.env.ANTHROPIC_API_KEY) {
       throw new Error('ANTHROPIC_API_KEY environment variable not set');
-    }
-
-    // composer.json exists
-    if (!this.fileTools.fileExists('composer.json')) {
-      throw new Error('composer.json not found — is this a Laravel project?');
     }
 
     // H9 FIX: Check binaries with Windows shell support
@@ -459,24 +579,50 @@ export class Orchestrator {
       mkdirSync(lockDir, { recursive: true });
     }
 
+    const lockContent = JSON.stringify({
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      hostname: hostname(),
+    });
+
     try {
       // C3 FIX: 'wx' flag = exclusive create, atomic on all platforms
-      writeFileSync(this._lockPath, String(process.pid), { flag: 'wx' });
+      writeFileSync(this._lockPath, lockContent, { flag: 'wx' });
     } catch (err) {
       if (err.code === 'EEXIST') {
-        // Lock file exists — check if the PID is stale
+        // Lock file exists — check if stale
         let stale = false;
         try {
-          const lockPid = parseInt(readFileSync(this._lockPath, 'utf8').trim(), 10);
-          // REL-4 FIX: On Windows, process.kill(pid, 0) is unreliable (permission errors,
-          // PID recycling). Use lock file age as a heuristic instead.
-          if (process.platform === 'win32') {
-            const lockAge = Date.now() - statSync(this._lockPath).mtimeMs;
-            // H5 FIX: 10 minutes (2× heartbeat) instead of 1 hour. Users no longer
-            // need to wait 55+ minutes after a crash on Windows.
-            stale = lockAge > STALE_LOCK_MS_WIN;
-          } else {
-            try { process.kill(lockPid, 0); } catch { stale = true; }
+          const raw = readFileSync(this._lockPath, 'utf8').trim();
+          let lockData;
+          try {
+            lockData = JSON.parse(raw);
+          } catch {
+            // Could be legacy format (plain PID) or corrupted
+            const lockPid = parseInt(raw, 10);
+            if (!isNaN(lockPid)) {
+              lockData = { pid: lockPid };
+            } else {
+              // Corrupted lock file — treat as stale
+              stale = true;
+            }
+          }
+
+          if (lockData && !stale) {
+            const pid = lockData.pid;
+
+            if (process.platform === 'win32') {
+              // REL-4 FIX: On Windows, process.kill(pid, 0) is unreliable.
+              // Use lock file age as a heuristic instead.
+              const lockAge = Date.now() - statSync(this._lockPath).mtimeMs;
+              stale = lockAge > STALE_LOCK_MS_WIN;
+            } else if (pid) {
+              try { process.kill(pid, 0); } catch { stale = true; }
+            } else {
+              // No PID in lock data (legacy format without PID)
+              const lockAge = Date.now() - statSync(this._lockPath).mtimeMs;
+              stale = lockAge > LEGACY_LOCK_STALE_MS;
+            }
           }
         } catch { stale = true; }
 
@@ -487,8 +633,6 @@ export class Orchestrator {
           );
         }
         // Stale lock — remove and re-acquire
-        // C4 FIX: Surface unlinkSync errors other than ENOENT (e.g. EACCES means
-        // a real permission problem, not a race condition).
         try { unlinkSync(this._lockPath); } catch (unlinkErr) {
           if (unlinkErr.code !== 'ENOENT') {
             throw new ShiftError('SHIFT_ERR_LOCK_CLEANUP',
@@ -496,7 +640,7 @@ export class Orchestrator {
           }
         }
         try {
-          writeFileSync(this._lockPath, String(process.pid), { flag: 'wx' });
+          writeFileSync(this._lockPath, lockContent, { flag: 'wx' });
         } catch (retryErr) {
           if (retryErr.code === 'EEXIST') {
             throw new ShiftError('SHIFT_ERR_LOCK_HELD',
@@ -772,8 +916,57 @@ export class Orchestrator {
     const result = await this.agents.dependency.updateDependencies(s.plan, referenceComposer);
     this._captureTokenUsage('dependency');
     this.state.set('dependencyResult', result);
+
+    // Clear stale bootstrap cache after dependency changes
+    await this._postDependencyCleanup();
+
     await this._phaseCommit('dependencies', 'composer.json updated');
     await this.logger.success('Orchestrator', 'Dependencies updated');
+  }
+
+  /**
+   * Clear bootstrap cache files after dependency updates to prevent stale
+   * provider references (e.g. Fruitcake\Cors after removing fruitcake/laravel-cors).
+   * Also regenerates the autoloader and runs package:discover.
+   */
+  async _postDependencyCleanup() {
+    const cacheDir = join(this.projectPath, 'bootstrap', 'cache');
+    if (existsSync(cacheDir)) {
+      const cacheFiles = readdirSync(cacheDir).filter(f => f.endsWith('.php'));
+      for (const file of cacheFiles) {
+        try {
+          unlinkSync(join(cacheDir, file));
+          await this.logger.info('Orchestrator', `Cleared stale cache: bootstrap/cache/${file}`);
+        } catch (err) {
+          await this.logger.warn('Orchestrator', `Failed to clear bootstrap/cache/${file}: ${err.message}`);
+        }
+      }
+    }
+
+    // Regenerate autoloader
+    try {
+      await execCommand('composer', ['dump-autoload', '--no-interaction'], {
+        cwd: this.projectPath,
+        timeout: 60_000,
+        useProcessEnv: true,
+      });
+      await this.logger.info('Orchestrator', 'Regenerated autoloader');
+    } catch (err) {
+      await this.logger.warn('Orchestrator', `dump-autoload failed: ${err.message}`);
+    }
+
+    // Regenerate package manifests
+    try {
+      await execCommand('php', ['artisan', 'package:discover', '--ansi'], {
+        cwd: this.projectPath,
+        timeout: 30_000,
+        useProcessEnv: true,
+      });
+      await this.logger.info('Orchestrator', 'Regenerated package discovery');
+    } catch (err) {
+      // May fail if artisan can't boot yet — transforms will fix it
+      await this.logger.debug('Orchestrator', `package:discover skipped: ${err.message}`);
+    }
   }
 
   async _runTransformations() {
@@ -786,6 +979,26 @@ export class Orchestrator {
     this._captureTokenUsage('transformer');
     await this._phaseCommit('transforms', `${results.transformed.length} files transformed`);
     await this.logger.success('Orchestrator', `Transforms: ${results.transformed.length} done, ${results.failed.length} failed, ${results.skipped.length} skipped`);
+  }
+
+  async _runPostTransformChecks() {
+    const s = this.state.get();
+    const toVersion = s.toVersion;
+    const issues = postTransformChecks(this.projectPath, toVersion);
+
+    if (issues.length > 0) {
+      for (const issue of issues) {
+        if (issue.action === 'deleted') {
+          await this.logger.warn('Orchestrator', `Post-transform cleanup: deleted ${issue.file} — ${issue.reason}`);
+        } else {
+          await this.logger.warn('Orchestrator', `Post-transform warning: ${issue.file} — ${issue.reason}`);
+        }
+      }
+      this.state.set('postTransformIssues', issues);
+      await this._phaseCommit('post-transform-checks', `${issues.filter(i => i.action === 'deleted').length} tombstone(s) cleaned`);
+    } else {
+      await this.logger.info('Orchestrator', 'Post-transform checks: no issues found');
+    }
   }
 
   async _runValidation() {

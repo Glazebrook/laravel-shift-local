@@ -6,7 +6,7 @@
  * don't exist, without requiring a running PHP/Laravel installation.
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { glob } from 'glob';
 
@@ -116,7 +116,7 @@ async function buildControllerMap(projectRoot) {
 /**
  * Parse route definitions from a PHP file.
  */
-function parseRoutes(content, filePath) {
+function parseRoutes(content, _filePath) {
   const routes = [];
   const lines = content.split('\n');
 
@@ -222,7 +222,7 @@ function extractClassName(ref) {
 /**
  * Validate a single route against the controller map.
  */
-function validateRoute(route, controllerMap, projectRoot) {
+function validateRoute(route, controllerMap, _projectRoot) {
   const controllerInfo = controllerMap.get(route.controller);
 
   if (!controllerInfo) {

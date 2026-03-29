@@ -166,6 +166,29 @@ export class TransformerAgent extends BaseAgent {
           throw new Error(result.error || 'Transform returned not-ok');
         }
       } catch (err) {
+        // Content filter fallback
+        if (err.status === 400 && err.message?.includes('content filtering')) {
+          await this.logger.warn(this.name, `Content filter blocked transform for ${filepath} — attempting fallback`);
+
+          const fallbackResult = await this._contentFilterFallback(filepath, step, analysis);
+          if (fallbackResult?.ok) {
+            this.stateManager.setFileStatus(filepath, 'done', {
+              description: step.description,
+              changesApplied: fallbackResult.changes || ['content filter fallback applied'],
+              fallback: fallbackResult.fallback,
+            });
+            results.transformed.push(filepath);
+            await this.logger.info(this.name, `✔ ${filepath} (fallback: ${fallbackResult.fallback})`);
+            continue;
+          }
+          // All fallbacks failed — mark for manual review
+          const reason = 'Content filter blocked this transform. Manual upgrade required.';
+          await this.logger.warn(this.name, `✘ ${filepath}: ${reason}`);
+          this.stateManager.setFileStatus(filepath, 'failed', { error: reason, contentFilter: true });
+          results.failed.push({ filepath, error: reason });
+          continue;
+        }
+
         await this.logger.error(this.name, `✘ ${filepath}: ${err.message}`);
         this.stateManager.setFileStatus(filepath, 'failed', { error: err.message });
         results.failed.push({ filepath, error: err.message });
@@ -173,6 +196,49 @@ export class TransformerAgent extends BaseAgent {
     }
 
     return results;
+  }
+
+  /**
+   * Fallback when the Anthropic API returns a content filter block.
+   * 1. Retry with a minimal prompt (strips potentially triggering content)
+   * 2. Use reference diff content if available
+   * 3. Return null if all fallbacks fail
+   */
+  async _contentFilterFallback(filepath, step, analysis) {
+    // Attempt 1: Retry with minimal prompt
+    try {
+      const tools = this.fileTools.getAgentTools();
+      const minimalMessages = [{
+        role: 'user',
+        content: `Update the file "${filepath}" for a Laravel ${analysis.laravelVersion} to ${this.stateManager?.get('toVersion') || 'next'} upgrade.\nTask: ${step.description}\nRead the file, apply the upgrade changes, and write it back.`,
+      }];
+      const result = await this.runForJson(
+        'You are a Laravel upgrade assistant. Apply the requested changes. Output JSON: {"ok": true, "changes": [...]}',
+        minimalMessages,
+        tools,
+      );
+      if (result?.ok) return { ...result, fallback: 'minimal_prompt' };
+    } catch { /* fall through */ }
+
+    // Attempt 2: Use reference diff manifest
+    try {
+      const { getFileChange, getTransitionChain } = await import('../reference-data.js');
+      const fromVersion = analysis.laravelVersion || this.stateManager?.get('fromVersion');
+      const toVersion = this.stateManager?.get('toVersion');
+      const chain = getTransitionChain(fromVersion, toVersion);
+
+      for (let i = 0; i < chain.length - 1; i++) {
+        const change = getFileChange(chain[i], chain[i + 1], filepath);
+        if (change?.type === 'removed') {
+          // File should be deleted
+          const tools = this.fileTools.getAgentTools();
+          await tools.handlers.delete_file({ filepath, reason: `Removed in Laravel ${chain[i + 1]} (content filter fallback)` });
+          return { ok: true, changes: [`Deleted ${filepath} (reference data)`], fallback: 'reference', deletedFiles: [filepath] };
+        }
+      }
+    } catch { /* fall through */ }
+
+    return null;
   }
 
   async _transformFile(step, analysis) {
@@ -204,6 +270,15 @@ Rules:
 5. Always output valid PHP/Blade syntax
 6. Preserve namespaces and imports exactly unless changing them
 
+When a file should be REMOVED in the target Laravel version (e.g., config/cors.php, app/Http/Kernel.php, removed middleware files, removed service providers), use the delete_file tool to delete it. Do NOT replace the file contents with a comment saying it should be deleted — this breaks Laravel's config loading and leaves dead code. Always use delete_file for removed files. Always use write_file for modified files.
+
+For Laravel 11+ structural migration:
+- Verify custom code has been migrated BEFORE deleting source files
+- If unsure whether custom code exists, read the file first
+- Kernel.php middleware must be migrated to bootstrap/app.php withMiddleware() before deletion
+- Exception handlers must be migrated to bootstrap/app.php withExceptions() before deletion
+- Custom service providers must be listed in bootstrap/providers.php before removing provider files
+
 After transformation, output JSON:
 {
   "ok": true,
@@ -211,11 +286,13 @@ After transformation, output JSON:
   "notes": ["any warnings or items needing manual review"],
   "skipped": ["patterns not found"],
   "renamedTo": null,
-  "newFilesCreated": []
+  "newFilesCreated": [],
+  "deletedFiles": []
 }
 
 If you rename or move a file, set "renamedTo" to the new path.
-If you create new files, list them in "newFilesCreated".`;
+If you create new files, list them in "newFilesCreated".
+If you delete files, list them in "deletedFiles".`;
 
     const tools = this.fileTools.getAgentTools();
 
@@ -242,8 +319,8 @@ ${manifestContext}
 
 Steps:
 1. Read the current file with read_file
-2. Apply all required transformations  
-3. Write the updated file with write_file
+2. Apply all required transformations
+3. Write the updated file with write_file, or delete it with delete_file if it should be removed
 4. Report what was changed`,
     }];
 

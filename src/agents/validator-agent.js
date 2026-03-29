@@ -6,6 +6,7 @@
 import { BaseAgent } from './base-agent.js';
 import { execCommand } from '../shell.js';
 import { join } from 'node:path';
+import { existsSync, readdirSync, unlinkSync } from 'node:fs';
 
 export class ValidatorAgent extends BaseAgent {
   constructor(deps) {
@@ -44,7 +45,19 @@ export class ValidatorAgent extends BaseAgent {
       await this.logger.success(this.name, `Syntax OK (${syntaxResults.checked} files checked)`);
     }
 
-    // 2. Artisan config cache
+    // 2a. Clear bootstrap cache as safety net (stale provider references)
+    this._clearBootstrapCache();
+
+    // 2b. Clear all artisan caches before validation
+    await this.logger.info(this.name, 'Clearing artisan caches...');
+    for (const cmd of ['config:clear', 'cache:clear', 'route:clear', 'view:clear']) {
+      const clearResult = await this._artisan([cmd]);
+      if (!clearResult.ok) {
+        await this.logger.debug(this.name, `${cmd} failed (non-fatal): ${clearResult.stderr}`);
+      }
+    }
+
+    // 2c. Artisan config cache
     await this.logger.info(this.name, 'Running artisan config:clear...');
     const configClear = await this._artisan(['config:clear']);
     if (!configClear.ok) {
@@ -140,6 +153,18 @@ export class ValidatorAgent extends BaseAgent {
       ],
       env: { APP_ENV: 'testing' },
     });
+  }
+
+  _clearBootstrapCache() {
+    const cacheDir = join(this.projectPath, 'bootstrap', 'cache');
+    if (!existsSync(cacheDir)) return;
+    const cacheFiles = readdirSync(cacheDir).filter(f => f.endsWith('.php'));
+    for (const file of cacheFiles) {
+      try {
+        unlinkSync(join(cacheDir, file));
+        this.logger.info(this.name, `Cleared stale cache: bootstrap/cache/${file}`);
+      } catch { /* best effort */ }
+    }
   }
 
   async _aiReviewErrors(validationResults, analysis) {

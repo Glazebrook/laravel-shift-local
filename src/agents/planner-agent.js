@@ -87,6 +87,26 @@ Additional upgrade hints:
 ${matrixHints.map(h => `- ${h}`).join('\n')}
 ${referenceSection}${guideSection}${preProcessingSection}
 
+## Laravel 11+ Structural Migration (REQUIRED when target >= 11)
+
+When the target version is Laravel 11 or higher, the following structural changes
+are MANDATORY, not optional. Even though Laravel 11 supports the old structure for
+backwards compatibility, this tool MUST apply the new structure:
+
+1. REMOVE app/Http/Kernel.php — migrate all middleware to bootstrap/app.php withMiddleware()
+2. REMOVE app/Console/Kernel.php — migrate scheduled commands to routes/console.php
+3. REMOVE app/Exceptions/Handler.php — migrate to bootstrap/app.php withExceptions()
+4. REWRITE bootstrap/app.php — use Application::configure() with withMiddleware() and withExceptions()
+5. CREATE bootstrap/providers.php — register all custom service providers
+6. REMOVE default middleware stubs (Authenticate, EncryptCookies, TrimStrings, TrustProxies, etc.)
+7. REMOVE RouteServiceProvider — move route configuration to bootstrap/app.php
+8. REMOVE BroadcastServiceProvider, EventServiceProvider, AuthServiceProvider (if default/empty)
+9. UPDATE tests/TestCase.php — remove CreatesApplication trait
+10. DELETE tests/CreatesApplication.php
+
+For EACH file being removed, use type "file_delete" or instruct the transformer
+to use delete_file, NOT write_file with a comment.
+
 Your plan must be executable by automated agents — be specific, ordered, and safe.
 Plan ONLY the changes that require contextual understanding — do NOT redo pre-processed changes.
 

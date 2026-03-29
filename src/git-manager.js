@@ -12,7 +12,7 @@ export class GitManager {
   constructor(projectPath, logger, config = {}) {
     this.cwd = projectPath;
     this.logger = logger;
-    this.commitPrefix = config.commitPrefix || '[shift]';
+    this.commitPrefix = config.commitPrefix || 'shift:';
   }
 
   /**

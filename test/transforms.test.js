@@ -224,6 +224,50 @@ describe('Transform: faker-methods', () => {
     assert.ok(!result.changed);
   });
 
+  it('does not break compound method names like paragraphs(3, true)', () => {
+    const php = `'content' => $this->faker->paragraphs(3, true),`;
+    const result = fakerMethods.transform(php);
+    assert.ok(!result.changed);
+    assert.equal(result.content, php);
+  });
+
+  it('does not break dateTimeBetween method calls', () => {
+    const php = `$this->faker->dateTimeBetween('-1 year', 'now')`;
+    const result = fakerMethods.transform(php);
+    assert.ok(!result.changed);
+    assert.equal(result.content, php);
+  });
+
+  it('does not break sentences method calls with arguments', () => {
+    const php = `$this->faker->sentences(5)`;
+    const result = fakerMethods.transform(php);
+    assert.ok(!result.changed);
+    assert.equal(result.content, php);
+  });
+
+  it('does not break randomElement method calls', () => {
+    const php = `$this->faker->randomElement(['a', 'b'])`;
+    const result = fakerMethods.transform(php);
+    assert.ok(!result.changed);
+    assert.equal(result.content, php);
+  });
+
+  it('transforms property access next to method calls in same file', () => {
+    const php = `$this->faker->name, $this->faker->paragraphs(3, true)`;
+    const result = fakerMethods.transform(php);
+    assert.ok(result.changed);
+    assert.ok(result.content.includes('$this->faker->name()'));
+    assert.ok(result.content.includes('$this->faker->paragraphs(3, true)'));
+  });
+
+  it('handles unique() and optional() chained with property access', () => {
+    const php = `$this->faker->unique()->email`;
+    // unique() returns a proxy — the property after it is still on faker
+    // This specific pattern doesn't match our regex (unique()->email is not faker->email)
+    const result = fakerMethods.transform(php);
+    assert.ok(!result.changed);
+  });
+
   it('applies from version 9+', () => {
     assert.equal(fakerMethods.appliesFrom, '9');
   });
