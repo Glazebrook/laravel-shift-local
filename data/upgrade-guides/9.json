@@ -1,0 +1,35 @@
+{
+  "version": "9.x",
+  "url": "https://laravel.com/docs/9.x/upgrade",
+  "fetchedAt": "2026-03-28",
+  "sections": [
+    {
+      "title": "Updating Dependencies",
+      "level": 2,
+      "content": "You should update the following dependencies in your composer.json for Laravel 9.",
+      "breaking": false
+    },
+    {
+      "title": "Application Structure",
+      "level": 2,
+      "content": "Laravel 9 introduces changes to the application structure that are breaking.",
+      "breaking": true
+    },
+    {
+      "title": "Password Rehashing",
+      "level": 3,
+      "content": "Laravel will automatically rehash passwords.",
+      "breaking": false
+    }
+  ],
+  "thirdParty": [
+    {
+      "package": "laravel/cashier-stripe",
+      "notes": "Cashier Stripe 15.x required, publish migrations."
+    },
+    {
+      "package": "livewire/livewire",
+      "notes": "Livewire v3 is recommended for this version."
+    }
+  ]
+}
