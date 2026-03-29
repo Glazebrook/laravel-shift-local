@@ -1,0 +1,65 @@
+{
+  "from": "11.x",
+  "to": "12.x",
+  "generated": "2026-03-28T00:00:00Z",
+  "sourceRepos": {
+    "from": "https://github.com/laravel-shift/laravel-11.x",
+    "to": "https://github.com/laravel-shift/laravel-12.x"
+  },
+  "skeleton": {
+    "filesAdded": [
+      {
+        "path": "new-file-12.php",
+        "content": "<?php // new file",
+        "description": "New file in Laravel 12"
+      }
+    ],
+    "filesRemoved": [
+      {
+        "path": "old-file-11.php",
+        "description": "Removed in Laravel 12",
+        "breaking": true,
+        "migration": "Migrate to new approach"
+      }
+    ],
+    "filesModified": [
+      {
+        "path": "config/app.php",
+        "diff": "--- a/config/app.php\n+++ b/config/app.php\n@@ -1 +1 @@\n-old\n+new",
+        "description": "Config changes",
+        "breaking": true
+      }
+    ]
+  },
+  "composer": {
+    "requireUpdates": {
+      "laravel/framework": {
+        "from": "^11.0",
+        "to": "^12.0"
+      },
+      "php": {
+        "from": "^8.3",
+        "to": "^8.4"
+      }
+    },
+    "requireDevUpdates": {
+      "phpunit/phpunit": {
+        "from": "^13.0",
+        "to": "^14.0"
+      }
+    },
+    "additions": {},
+    "removals": []
+  },
+  "breakingChanges": [
+    {
+      "category": "structure",
+      "title": "Breaking change 11 to 12",
+      "description": "Sample breaking change for 11 → 12",
+      "affectedFiles": [
+        "config/app.php"
+      ],
+      "automatable": true
+    }
+  ]
+}

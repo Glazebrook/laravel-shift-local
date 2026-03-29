@@ -20,7 +20,19 @@
       "Bash(find . -name AUDIT_REPORT* -o -name audit-report*)",
       "Bash(wc -l ./test/*.test.js)",
       "Bash(wc -l src/**/*.js bin/*.js config/*.js)",
-      "Bash(wc -l /c/Projects/laravel-shift-local/src/agents/*.js)"
+      "Bash(wc -l /c/Projects/laravel-shift-local/src/agents/*.js)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(npm run:*)",
+      "Bash(node --test test/reference-data.test.js)",
+      "Bash(node --test test/transforms.test.js)",
+      "Bash(node --test test/upgrade-guide.test.js)",
+      "Bash(node --test test/style-formatter.test.js)",
+      "Bash(node --test test/blueprint-exporter.test.js)",
+      "Bash(node --test test/route-checker.test.js)",
+      "Bash(node -e \":*)",
+      "Bash(node --test --test-name-pattern=\"validates resource\" test/route-checker.test.js)",
+      "Bash(node --test test/pipeline-integration.test.js)"
     ]
   }
 }

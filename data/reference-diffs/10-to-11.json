@@ -1,0 +1,67 @@
+{
+  "from": "10.x",
+  "to": "11.x",
+  "generated": "2026-03-28T00:00:00Z",
+  "sourceRepos": {
+    "from": "https://github.com/laravel-shift/laravel-10.x",
+    "to": "https://github.com/laravel-shift/laravel-11.x"
+  },
+  "skeleton": {
+    "filesAdded": [
+      {
+        "path": "new-file-11.php",
+        "content": "<?php // new file",
+        "description": "New file in Laravel 11"
+      }
+    ],
+    "filesRemoved": [
+      {
+        "path": "old-file-10.php",
+        "description": "Removed in Laravel 11",
+        "breaking": true,
+        "migration": "Migrate to new approach"
+      }
+    ],
+    "filesModified": [
+      {
+        "path": "config/app.php",
+        "diff": "--- a/config/app.php\n+++ b/config/app.php\n@@ -1 +1 @@\n-old\n+new",
+        "description": "Config changes",
+        "breaking": true
+      }
+    ]
+  },
+  "composer": {
+    "requireUpdates": {
+      "laravel/framework": {
+        "from": "^10.0",
+        "to": "^11.0"
+      },
+      "php": {
+        "from": "^8.2",
+        "to": "^8.3"
+      }
+    },
+    "requireDevUpdates": {
+      "phpunit/phpunit": {
+        "from": "^12.0",
+        "to": "^13.0"
+      }
+    },
+    "additions": {},
+    "removals": [
+      "doctrine/dbal"
+    ]
+  },
+  "breakingChanges": [
+    {
+      "category": "structure",
+      "title": "Breaking change 10 to 11",
+      "description": "Sample breaking change for 10 → 11",
+      "affectedFiles": [
+        "config/app.php"
+      ],
+      "automatable": true
+    }
+  ]
+}

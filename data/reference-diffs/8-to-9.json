@@ -1,0 +1,65 @@
+{
+  "from": "8.x",
+  "to": "9.x",
+  "generated": "2026-03-28T00:00:00Z",
+  "sourceRepos": {
+    "from": "https://github.com/laravel-shift/laravel-8.x",
+    "to": "https://github.com/laravel-shift/laravel-9.x"
+  },
+  "skeleton": {
+    "filesAdded": [
+      {
+        "path": "new-file-9.php",
+        "content": "<?php // new file",
+        "description": "New file in Laravel 9"
+      }
+    ],
+    "filesRemoved": [
+      {
+        "path": "old-file-8.php",
+        "description": "Removed in Laravel 9",
+        "breaking": true,
+        "migration": "Migrate to new approach"
+      }
+    ],
+    "filesModified": [
+      {
+        "path": "config/app.php",
+        "diff": "--- a/config/app.php\n+++ b/config/app.php\n@@ -1 +1 @@\n-old\n+new",
+        "description": "Config changes",
+        "breaking": true
+      }
+    ]
+  },
+  "composer": {
+    "requireUpdates": {
+      "laravel/framework": {
+        "from": "^8.0",
+        "to": "^9.0"
+      },
+      "php": {
+        "from": "^8.0",
+        "to": "^8.1"
+      }
+    },
+    "requireDevUpdates": {
+      "phpunit/phpunit": {
+        "from": "^10.0",
+        "to": "^11.0"
+      }
+    },
+    "additions": {},
+    "removals": []
+  },
+  "breakingChanges": [
+    {
+      "category": "structure",
+      "title": "Breaking change 8 to 9",
+      "description": "Sample breaking change for 8 → 9",
+      "affectedFiles": [
+        "config/app.php"
+      ],
+      "automatable": true
+    }
+  ]
+}
