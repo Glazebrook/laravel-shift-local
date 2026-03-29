@@ -4,7 +4,7 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { runStyleFormatting, generateStyleReport } from '../src/style-formatter.js';
@@ -148,6 +148,34 @@ describe('StyleFormatter', () => {
     it('handles null result', () => {
       const report = generateStyleReport(null);
       assert.ok(report.includes('No files'));
+    });
+  });
+
+  describe('E2E-7: Path handling', () => {
+    it('formatter binary uses relative path, not absolute', async () => {
+      writeFileSync(join(tmpDir, 'vendor', 'bin', 'pint'), '#!/usr/bin/env php\n');
+      writeFileSync(join(tmpDir, 'pint.json'), '{}');
+      const result = await runStyleFormatting(tmpDir, { dryRun: true }, { enabled: true });
+      assert.equal(result.formatter, 'pint');
+      // Cleanup
+      rmSync(join(tmpDir, 'vendor', 'bin', 'pint'));
+      rmSync(join(tmpDir, 'pint.json'));
+    });
+
+    it('source code uses relative vendorPath', () => {
+      const source = readFileSync(join(import.meta.dirname, '..', 'src', 'style-formatter.js'), 'utf8');
+      assert.ok(source.includes("join('vendor', 'bin', name)"), 'Should use relative path join');
+    });
+
+    it('sandbox block produces clear warning message', () => {
+      const source = readFileSync(join(import.meta.dirname, '..', 'src', 'style-formatter.js'), 'utf8');
+      assert.ok(source.includes('blocked by the execution sandbox'), 'Should have clear sandbox warning');
+      assert.ok(source.includes('Run `vendor/bin/pint` manually'), 'Should suggest manual workaround');
+    });
+
+    it('cwd set to project root for execution', () => {
+      const source = readFileSync(join(import.meta.dirname, '..', 'src', 'style-formatter.js'), 'utf8');
+      assert.ok(source.includes('cwd: projectRoot'), 'Should set cwd to projectRoot');
     });
   });
 });

@@ -135,13 +135,16 @@ function detectPhpCsFixer(projectRoot) {
 }
 
 function findBinary(projectRoot, name) {
-  const vendorPath = join(projectRoot, 'vendor', 'bin', name);
-  if (existsSync(vendorPath)) return vendorPath;
+  // Return relative path to avoid sandbox issues with absolute paths
+  const vendorRelative = join('vendor', 'bin', name);
+  const vendorAbsolute = join(projectRoot, vendorRelative);
+  if (existsSync(vendorAbsolute)) return vendorRelative;
 
   // On Windows, check for .bat variant
   if (process.platform === 'win32') {
-    const batPath = vendorPath + '.bat';
-    if (existsSync(batPath)) return batPath;
+    const batRelative = vendorRelative + '.bat';
+    const batAbsolute = vendorAbsolute + '.bat';
+    if (existsSync(batAbsolute)) return batRelative;
   }
 
   return null;
@@ -196,6 +199,11 @@ async function runFormatter(detected, projectRoot, options = {}) {
   if (logger) {
     if (result.ok) {
       await logger.info('StyleFormatter', `Formatting complete: ${filesChanged} file(s) changed`);
+    } else if (result.exitCode === -1 && (result.stderr || '').includes('Blocked')) {
+      await logger.warn('StyleFormatter',
+        'Code style formatting was blocked by the execution sandbox. ' +
+        'This is a sandbox restriction, not a tool error. ' +
+        'Run `vendor/bin/pint` manually after the upgrade completes.');
     } else {
       await logger.warn('StyleFormatter', `Formatter exited with code ${result.exitCode}: ${(result.stderr || '').substring(0, 200)}`);
     }
