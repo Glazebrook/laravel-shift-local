@@ -916,8 +916,57 @@ export class Orchestrator {
     const result = await this.agents.dependency.updateDependencies(s.plan, referenceComposer);
     this._captureTokenUsage('dependency');
     this.state.set('dependencyResult', result);
+
+    // Clear stale bootstrap cache after dependency changes
+    await this._postDependencyCleanup();
+
     await this._phaseCommit('dependencies', 'composer.json updated');
     await this.logger.success('Orchestrator', 'Dependencies updated');
+  }
+
+  /**
+   * Clear bootstrap cache files after dependency updates to prevent stale
+   * provider references (e.g. Fruitcake\Cors after removing fruitcake/laravel-cors).
+   * Also regenerates the autoloader and runs package:discover.
+   */
+  async _postDependencyCleanup() {
+    const cacheDir = join(this.projectPath, 'bootstrap', 'cache');
+    if (existsSync(cacheDir)) {
+      const cacheFiles = readdirSync(cacheDir).filter(f => f.endsWith('.php'));
+      for (const file of cacheFiles) {
+        try {
+          unlinkSync(join(cacheDir, file));
+          await this.logger.info('Orchestrator', `Cleared stale cache: bootstrap/cache/${file}`);
+        } catch (err) {
+          await this.logger.warn('Orchestrator', `Failed to clear bootstrap/cache/${file}: ${err.message}`);
+        }
+      }
+    }
+
+    // Regenerate autoloader
+    try {
+      await execCommand('composer', ['dump-autoload', '--no-interaction'], {
+        cwd: this.projectPath,
+        timeout: 60_000,
+        useProcessEnv: true,
+      });
+      await this.logger.info('Orchestrator', 'Regenerated autoloader');
+    } catch (err) {
+      await this.logger.warn('Orchestrator', `dump-autoload failed: ${err.message}`);
+    }
+
+    // Regenerate package manifests
+    try {
+      await execCommand('php', ['artisan', 'package:discover', '--ansi'], {
+        cwd: this.projectPath,
+        timeout: 30_000,
+        useProcessEnv: true,
+      });
+      await this.logger.info('Orchestrator', 'Regenerated package discovery');
+    } catch (err) {
+      // May fail if artisan can't boot yet — transforms will fix it
+      await this.logger.debug('Orchestrator', `package:discover skipped: ${err.message}`);
+    }
   }
 
   async _runTransformations() {

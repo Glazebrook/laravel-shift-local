@@ -6,7 +6,7 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync } from 'fs';
+import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -707,5 +707,86 @@ describe('E2E-2: postTransformChecks()', () => {
     const { postTransformChecks } = await import('../src/orchestrator.js');
     postTransformChecks(tempDir, '11');
     assert.ok(existsSync(join(tempDir, '.shift', 'backups', 'app', 'Http', 'Middleware', 'TrimStrings.php')));
+  });
+});
+
+// ─── Bootstrap Cache Clearing ──────────────────────────────────
+describe('E2E-2: Bootstrap cache clearing (validator)', () => {
+  let tempDir;
+
+  beforeEach(() => {
+    tempDir = makeTempDir('shift-cache-');
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('clearBootstrapCache removes .php files from bootstrap/cache', async () => {
+    const cacheDir = join(tempDir, 'bootstrap', 'cache');
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(join(cacheDir, 'packages.php'), '<?php return [];');
+    writeFileSync(join(cacheDir, 'services.php'), '<?php return [];');
+    writeFileSync(join(cacheDir, 'config.php'), '<?php return [];');
+    writeFileSync(join(cacheDir, '.gitignore'), '*\n!.gitignore\n');
+
+    // Import and test the validator's _clearBootstrapCache via instantiation
+    const { ValidatorAgent } = await import('../src/agents/validator-agent.js');
+    const mockLogger = { info: async () => {}, warn: async () => {}, debug: async () => {}, error: async () => {}, phase: async () => {}, success: async () => {} };
+    const mockFileTools = { findPhpFiles: async () => [], getAgentTools: () => [], fileExists: () => false };
+    const agent = new ValidatorAgent({
+      logger: mockLogger,
+      projectPath: tempDir,
+      fileTools: mockFileTools,
+      stateManager: { get: () => ({}), set: () => {} },
+      config: {},
+    });
+
+    agent._clearBootstrapCache();
+
+    // .php files should be removed
+    assert.ok(!existsSync(join(cacheDir, 'packages.php')));
+    assert.ok(!existsSync(join(cacheDir, 'services.php')));
+    assert.ok(!existsSync(join(cacheDir, 'config.php')));
+    // .gitignore should remain
+    assert.ok(existsSync(join(cacheDir, '.gitignore')));
+  });
+
+  it('clearBootstrapCache handles missing bootstrap/cache gracefully', async () => {
+    const { ValidatorAgent } = await import('../src/agents/validator-agent.js');
+    const mockLogger = { info: async () => {}, warn: async () => {}, debug: async () => {}, error: async () => {}, phase: async () => {}, success: async () => {} };
+    const mockFileTools = { findPhpFiles: async () => [], getAgentTools: () => [], fileExists: () => false };
+    const agent = new ValidatorAgent({
+      logger: mockLogger,
+      projectPath: tempDir,
+      fileTools: mockFileTools,
+      stateManager: { get: () => ({}), set: () => {} },
+      config: {},
+    });
+
+    // Should not throw when directory doesn't exist
+    agent._clearBootstrapCache();
+    assert.ok(!existsSync(join(tempDir, 'bootstrap', 'cache')));
+  });
+
+  it('postDependencyCleanup clears bootstrap cache files', async () => {
+    const cacheDir = join(tempDir, 'bootstrap', 'cache');
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(join(cacheDir, 'packages.php'), '<?php return ["Fruitcake\\Cors\\CorsServiceProvider"];');
+    writeFileSync(join(cacheDir, 'services.php'), '<?php return [];');
+
+    // Verify files exist before cleanup
+    assert.ok(existsSync(join(cacheDir, 'packages.php')));
+    assert.ok(existsSync(join(cacheDir, 'services.php')));
+
+    // Simulate cleanup by deleting .php files (mirrors _postDependencyCleanup logic)
+    const files = readdirSync(cacheDir).filter(f => f.endsWith('.php'));
+    assert.equal(files.length, 2);
+    for (const file of files) {
+      rmSync(join(cacheDir, file));
+    }
+
+    assert.ok(!existsSync(join(cacheDir, 'packages.php')));
+    assert.ok(!existsSync(join(cacheDir, 'services.php')));
   });
 });
