@@ -155,7 +155,7 @@ export class BaseAgent {
   /**
    * H12 FIX: maxTokens is now configurable per agent instance.
    */
-  constructor(name, { model, logger, maxRetries = 5, timeoutMs = 300_000, maxTokens = 8192, tokenTracker = null, maxTotalTokens = null }) {
+  constructor(name, { model, logger, maxRetries = 5, timeoutMs = 300_000, maxTokens = 8192, tokenTracker = null, maxTotalTokens = null, client = null, mapModel = null }) {
     this.name = name;
     this.model = model;
     this.logger = logger;
@@ -167,8 +167,10 @@ export class BaseAgent {
     this._maxTotalTokens = maxTotalTokens;
     // Per-agent token usage tracking
     this._tokenUsage = { input: 0, output: 0, calls: 0 };
-    // M13 FIX: Use shared client instance
-    this.client = getSharedClient();
+    // M13 FIX: Use shared client instance (injected client takes priority)
+    this.client = client || getSharedClient();
+    // Bedrock model mapping (identity function if not provided)
+    this._mapModel = mapModel || (m => m);
   }
 
   get tokenUsage() {
@@ -198,7 +200,7 @@ export class BaseAgent {
       const compactedMessages = compactMessages(messages, MAX_CONTEXT_TOKENS - systemTokens);
 
       const params = {
-        model: this.model,
+        model: this._mapModel(this.model),
         max_tokens: this.maxTokens,  // H12 FIX: configurable per agent
         system: systemPrompt,
         messages: compactedMessages,
@@ -392,15 +394,21 @@ export class BaseAgent {
       } catch (err) {
         lastErr = err;
         // REL-9 FIX: Give a clear error for auth failures instead of cryptic deep error
+        // Bedrock uses 403/AccessDeniedException for auth failures
         if (err.status === 401 || err.status === 403) {
-          throw new AgentError('AGENT_ERR_AUTH', `Anthropic API authentication failed (HTTP ${err.status}). Check your ANTHROPIC_API_KEY.`, this.name);
+          const hint = err.status === 403
+            ? 'Check your AWS credentials and IAM permissions (bedrock:InvokeModel).'
+            : 'Check your ANTHROPIC_API_KEY.';
+          throw new AgentError('AGENT_ERR_AUTH', `API authentication failed (HTTP ${err.status}). ${hint}`, this.name);
         }
         const isTimeout = err.name === 'AbortError' || err.code === 'ABORT_ERR';
         // P1-001 FIX: Also retry on HTTP 408 (Request Timeout) from Anthropic API
         // AUDIT-2 FIX: Retry on network errors without HTTP status (ECONNREFUSED, ETIMEDOUT, etc.)
         const RETRYABLE_NETWORK_CODES = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EPIPE', 'EHOSTUNREACH', 'EAI_AGAIN'];
         const isNetworkError = RETRYABLE_NETWORK_CODES.includes(err.code) || RETRYABLE_NETWORK_CODES.includes(err.cause?.code);
-        const isRetryable = isTimeout || isNetworkError || err.status === 408 || err.status === 429 || (err.status && err.status >= 500);
+        // Bedrock ThrottlingException may come as 429 or with error.name
+        const isThrottled = err.status === 429 || err.name === 'ThrottlingException';
+        const isRetryable = isTimeout || isNetworkError || isThrottled || err.status === 408 || (err.status && err.status >= 500);
         if (!isRetryable || attempt === this.maxRetries) throw err;
 
         // M9 FIX: Add jitter (±25%) to prevent all agents retrying simultaneously

@@ -21,6 +21,7 @@ import { TransformerAgent } from './agents/transformer-agent.js';
 import { ValidatorAgent } from './agents/validator-agent.js';
 import { ReporterAgent } from './agents/reporter-agent.js';
 
+import { createApiClient } from './api-provider.js';
 import { ShiftBaseError } from './errors.js';
 import { execCommand, execCommandSync } from './shell.js';
 // L1 FIX: Use shared sleep utility instead of duplicating
@@ -172,6 +173,12 @@ export class Orchestrator {
     this._cumulativeTokens = { input: 0, output: 0 };
     this._maxTotalTokens = config.maxTotalTokens || null; // null = no limit
 
+    // Create API client once — shared across all agents
+    const api = createApiClient(config);
+    this._provider = api.provider;
+    this._mapModel = api.mapModel;
+    this._getPricing = api.getPricing;
+
     const agentDeps = {
       logger,
       projectPath,
@@ -182,6 +189,9 @@ export class Orchestrator {
       // C7 FIX: Shared token tracker so agents can report usage
       tokenTracker: this._cumulativeTokens,
       maxTotalTokens: this._maxTotalTokens,
+      // Bedrock/Anthropic provider support
+      client: api.client,
+      mapModel: api.mapModel,
     };
 
     // Agent pool
@@ -1110,6 +1120,9 @@ export class Orchestrator {
       }
     }
 
+    // Pass provider info so the reporter can calculate costs
+    s.provider = this._provider;
+    s.getPricing = this._getPricing;
     const report = await this.agents.reporter.generateReport(s);
     this._captureTokenUsage('reporter');
     this.state.set('report', report);
