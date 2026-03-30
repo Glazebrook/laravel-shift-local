@@ -23,6 +23,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { KNOWN_VERSIONS, SPECULATIVE_VERSIONS } from '../src/state-manager.js';
 import { ShiftBaseError } from '../src/errors.js';
+import { detectProvider } from '../src/api-provider.js';
 
 // FINDING-15 FIX: Named constant for .shiftrc max file size
 const SHIFTRC_MAX_SIZE = 1_048_576; // 1MB
@@ -356,6 +357,13 @@ function loadConfig(projectPath, cliOpts = {}) {
           if (rc.exclude.paths) config.exclude.paths = [...rc.exclude.paths];
           if (rc.exclude.filePatterns) config.exclude.filePatterns = [...rc.exclude.filePatterns];
         }
+        // Merge provider settings
+        if (rc.provider) config.provider = rc.provider;
+        if (rc.bedrock && typeof rc.bedrock === 'object') {
+          config.bedrock = {};
+          if (typeof rc.bedrock.region === 'string') config.bedrock.region = rc.bedrock.region;
+          if (typeof rc.bedrock.globalInference === 'boolean') config.bedrock.globalInference = rc.bedrock.globalInference;
+        }
         // Merge git settings
         if (rc.git) {
           if (rc.git.branchPrefix) config.git.branchPrefix = rc.git.branchPrefix;
@@ -398,11 +406,17 @@ async function runUpgrade(opts) {
     throw new ShiftCliError('SHIFT_ERR_PATH_NOT_FOUND', `Project path not found: ${projectPath}`);
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
+  const config = loadConfig(projectPath, opts);
+
+  // Provider-aware credential check
+  const effectiveProvider = config.provider || detectProvider();
+  if (effectiveProvider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
     throw new ShiftCliError('SHIFT_ERR_API_AUTH', 'ANTHROPIC_API_KEY environment variable is required');
   }
-
-  const config = loadConfig(projectPath, opts);
+  if (effectiveProvider === 'bedrock' && !process.env.AWS_ACCESS_KEY_ID && !process.env.AWS_PROFILE) {
+    throw new ShiftCliError('SHIFT_ERR_API_AUTH',
+      'AWS credentials required for Bedrock provider. Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or AWS_PROFILE.');
+  }
 
   const fromArg = opts.from || config.shift.fromVersion;
   const toArg = opts.to || config.shift.toVersion;
@@ -479,6 +493,7 @@ async function runUpgrade(opts) {
       console.log('🚀 Laravel Shift Local');
       console.log(`  Upgrading: Laravel ${fromVersion} → ${toVersion}`);
       console.log(`  Project: ${projectPath}`);
+      console.log(`  Provider: ${effectiveProvider}${effectiveProvider === 'bedrock' ? ` (${config.bedrock?.region || 'us-east-1'})` : ''}`);
       if (config.dryRun) console.log('  Mode: DRY RUN — no changes will be made');
     }
 
@@ -505,11 +520,15 @@ async function runUpgrade(opts) {
     ));
   } else {
     const dryRunLabel = config.dryRun ? `\n  ${chalk.yellow('Mode: DRY RUN — no changes will be made')}` : '';
+    const providerLabel = effectiveProvider === 'bedrock'
+      ? `AWS Bedrock (${config.bedrock?.region || 'us-east-1'})`
+      : 'Anthropic API';
     console.log(boxen(
       `${chalk.bold.blue('🚀 Laravel Shift Local')}\n\n` +
       `  Upgrading: Laravel ${chalk.bold(fromVersion)} → ${chalk.bold(toVersion)}\n` +
       `  Project: ${chalk.cyan(projectPath)}\n` +
-      `  Model: Claude Opus 4 (Orchestrator) + Sonnet 4 (Agents)` +
+      `  Provider: ${chalk.bold(providerLabel)}\n` +
+      `  Models: Claude Opus 4.6 (Orchestrator) + Sonnet 4.6 (Agents)` +
       dryRunLabel,
       { padding: 1, borderColor: 'blue', borderStyle: 'round' }
     ));
@@ -546,11 +565,6 @@ async function resumeUpgrade(opts) {
     throw new ShiftCliError('SHIFT_ERR_NO_STATE', 'No shift state found. Run: shift upgrade --from=X --to=Y');
   }
 
-  // H1 FIX: Check API key before proceeding (was missing from resume)
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new ShiftCliError('SHIFT_ERR_API_AUTH', 'ANTHROPIC_API_KEY environment variable is required');
-  }
-
   stateManager.load();
 
   // BUG-7 FIX: Validate state integrity before using it
@@ -581,6 +595,17 @@ async function resumeUpgrade(opts) {
   const s = stateManager.get();
 
   const config = loadConfig(projectPath, opts);
+
+  // H1 FIX: Provider-aware credential check on resume
+  const effectiveProvider = config.provider || detectProvider();
+  if (effectiveProvider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
+    throw new ShiftCliError('SHIFT_ERR_API_AUTH', 'ANTHROPIC_API_KEY environment variable is required');
+  }
+  if (effectiveProvider === 'bedrock' && !process.env.AWS_ACCESS_KEY_ID && !process.env.AWS_PROFILE) {
+    throw new ShiftCliError('SHIFT_ERR_API_AUTH',
+      'AWS credentials required for Bedrock provider. Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or AWS_PROFILE.');
+  }
+
   const logger = new Logger(projectPath, config.verbose);
 
   if (opts.json) {
