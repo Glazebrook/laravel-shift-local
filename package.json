@@ -12,7 +12,7 @@
     "status": "node bin/shift.js status",
     "resume": "node bin/shift.js resume",
     "rollback": "node bin/shift.js rollback",
-    "test": "node --test test/core.test.js test/extended.test.js test/integration.test.js test/orchestrator.test.js test/base-agent.test.js test/git-manager.test.js test/cli.test.js test/audit-fixes.test.js test/shell.test.js test/errors.test.js test/token-tracking.test.js test/reference-data.test.js test/transforms.test.js test/upgrade-guide.test.js test/style-formatter.test.js test/blueprint-exporter.test.js test/route-checker.test.js test/pipeline-integration.test.js test/conformity-checker.test.js",
+    "test": "node --test test/core.test.js test/extended.test.js test/integration.test.js test/orchestrator.test.js test/base-agent.test.js test/git-manager.test.js test/cli.test.js test/audit-fixes.test.js test/shell.test.js test/errors.test.js test/token-tracking.test.js test/reference-data.test.js test/transforms.test.js test/upgrade-guide.test.js test/style-formatter.test.js test/blueprint-exporter.test.js test/route-checker.test.js test/pipeline-integration.test.js test/conformity-checker.test.js test/api-provider.test.js",
     "test:integration": "node --test test/integration/*.test.js",
     "test:integration:docker": "docker compose -f test/integration/docker-compose.yml up --build --abort-on-container-exit",
     "lint": "eslint src/ test/ bin/ config/",
@@ -22,12 +22,13 @@
     "postinstall": "echo 'Laravel Shift Local installed. Run: shift upgrade --from=X --to=Y'"
   },
   "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "0.26.4",
     "@anthropic-ai/sdk": "^0.80.0",
+    "boxen": "^8.0.1",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
-    "glob": "^11.0.0",
     "execa": "^9.0.0",
-    "boxen": "^8.0.1"
+    "glob": "^11.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
