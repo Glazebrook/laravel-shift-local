@@ -26,7 +26,7 @@ export class ReporterAgent extends BaseAgent {
     const {
       fromVersion, toVersion, analysis,
       transformations, validation, branchName, phaseTimings,
-      tokenUsage,
+      tokenUsage, provider, getPricing,
     } = state;
 
     const gitLog = await this.git.getLog(20);
@@ -198,10 +198,13 @@ Return the structured JSON now.`,
 
     // Token Usage
     if (tokenUsage && Object.keys(tokenUsage).length > 0) {
+      const hasCostFn = typeof getPricing === 'function';
+      const opusAgents = new Set(['analyzer', 'planner']);
       md += `## Token Usage\n\n`;
-      md += `| Agent | Input Tokens | Output Tokens | API Calls |\n`;
-      md += `|-------|-------------|---------------|-----------|\n`;
-      let totalInput = 0, totalOutput = 0, totalCalls = 0;
+      md += hasCostFn
+        ? `| Agent | Input Tokens | Output Tokens | API Calls | Est. Cost |\n|-------|-------------|---------------|-----------|----------|\n`
+        : `| Agent | Input Tokens | Output Tokens | API Calls |\n|-------|-------------|---------------|-----------|\n`;
+      let totalInput = 0, totalOutput = 0, totalCalls = 0, totalCost = 0;
       for (const [agent, usage] of Object.entries(tokenUsage)) {
         const inp = usage.input || 0;
         const out = usage.output || 0;
@@ -209,9 +212,21 @@ Return the structured JSON now.`,
         totalInput += inp;
         totalOutput += out;
         totalCalls += calls;
-        md += `| ${agent} | ${inp.toLocaleString()} | ${out.toLocaleString()} | ${calls} |\n`;
+        if (hasCostFn) {
+          const model = opusAgents.has(agent) ? 'claude-opus-4-6' : 'claude-sonnet-4-6';
+          const cost = getPricing(model, inp, out);
+          totalCost += cost || 0;
+          md += `| ${agent} | ${inp.toLocaleString()} | ${out.toLocaleString()} | ${calls} | ${cost != null ? `$${cost.toFixed(4)}` : '-'} |\n`;
+        } else {
+          md += `| ${agent} | ${inp.toLocaleString()} | ${out.toLocaleString()} | ${calls} |\n`;
+        }
       }
-      md += `| **Total** | **${totalInput.toLocaleString()}** | **${totalOutput.toLocaleString()}** | **${totalCalls}** |\n\n`;
+      md += hasCostFn
+        ? `| **Total** | **${totalInput.toLocaleString()}** | **${totalOutput.toLocaleString()}** | **${totalCalls}** | **$${totalCost.toFixed(4)}** |\n\n`
+        : `| **Total** | **${totalInput.toLocaleString()}** | **${totalOutput.toLocaleString()}** | **${totalCalls}** |\n\n`;
+      if (hasCostFn && provider) {
+        md += `> Provider: ${provider === 'bedrock' ? 'AWS Bedrock' : 'Anthropic API'}\n\n`;
+      }
     }
 
     // Version Conformity Check
