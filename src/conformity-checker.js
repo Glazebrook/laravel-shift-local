@@ -228,7 +228,7 @@ function checkComposerConformity(projectRoot, version, report) {
   }
 
   // PHP version constraint check
-  const expectedPhp = { '9': '^8.0', '10': '^8.1', '11': '^8.2', '12': '^8.2', '13': '^8.2' };
+  const expectedPhp = { '9': '^8.0', '10': '^8.1', '11': '^8.2', '12': '^8.2', '13': '^8.3' };
   const declaredPhp = composerJson.require?.php;
   if (declaredPhp && expectedPhp[version]) {
     const declaredMin = parseFloat(declaredPhp.replace(/[^0-9.]/g, ''));

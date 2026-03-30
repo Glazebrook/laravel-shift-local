@@ -6,6 +6,15 @@
  *   P1-003: Backup restore before retry of interrupted transforms
  *   P1-004: Case-insensitive path comparison on resume
  *   P3-001: branchPrefix leading slash / consecutive slash sanitization
+ *
+ * Audit-5 fix coverage (appended):
+ *   P1-001: _phpSyntaxCheck checks result.ok instead of try/catch
+ *   P1-002: _contentFilterFallback passes string version numbers
+ *   P2-001: _phpSyntaxCheck uses envKeys instead of useProcessEnv
+ *   P2-005: class-strings detect() no /g flag — no stateful regex
+ *   P2-008: l11-structural readFileSync with try-catch
+ *   SEC-002: pre-processor safeWriteFile validates paths and creates backups
+ *   SEC-003: l11-structural validatePath before writes
  */
 
 import { describe, it, afterEach } from 'node:test';
@@ -1449,5 +1458,497 @@ describe('E2E-5: Content filter fallback', () => {
     const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
     assert.ok(source.includes("type === 'removed'"), 'Should check if file should be deleted per reference data');
     assert.ok(source.includes('delete_file'), 'Should use delete_file for removed files');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════
+// AUDIT-5 Regression Tests
+// ══════════════════════════════════════════════════════════════════
+
+// ── P1-001: _phpSyntaxCheck checks result.ok instead of try/catch ──
+
+describe('AUDIT-5 P1-001: _phpSyntaxCheck collects errors from result.ok', () => {
+  it('source uses result.ok check (not try/catch) for syntax errors', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/validator-agent.js'), 'utf8');
+    // The fix: check result.ok instead of catching exceptions
+    assert.ok(source.includes('if (!result.ok)'), 'Should check result.ok for syntax errors');
+    assert.ok(source.includes('result.stderr'), 'Should collect stderr from result');
+  });
+
+  it('validator _phpSyntaxCheck does not use try/catch around execCommand', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/validator-agent.js'), 'utf8');
+    // Extract the _phpSyntaxCheck method body
+    const methodStart = source.indexOf('async _phpSyntaxCheck()');
+    const methodEnd = source.indexOf('\n  }', methodStart + 1);
+    const methodBody = source.slice(methodStart, methodEnd);
+    // Should NOT have try/catch around the execCommand call
+    assert.ok(!methodBody.includes('try {'), '_phpSyntaxCheck should not use try/catch around execCommand');
+  });
+});
+
+// ── P1-002: _contentFilterFallback passes string version numbers ──
+
+describe('AUDIT-5 P1-002: _contentFilterFallback passes string versions to getFileChange', () => {
+  it('source calls getFileChange with step.from and step.to strings', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
+    // The fix: pass step.from and step.to (strings), not the step object
+    assert.ok(source.includes('getFileChange(step.from, step.to,'), 'Should pass step.from and step.to as separate string args');
+  });
+
+  it('source iterates chain steps with from/to properties', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
+    // The chain returns [{from, to, manifest}] and we destructure step
+    assert.ok(source.includes('for (const step of chain)'), 'Should iterate chain steps');
+    assert.ok(source.includes('step.from'), 'Should reference step.from');
+    assert.ok(source.includes('step.to'), 'Should reference step.to');
+  });
+});
+
+// ── P2-001: _phpSyntaxCheck uses envKeys instead of useProcessEnv ──
+
+describe('AUDIT-5 P2-001: _phpSyntaxCheck uses envKeys not useProcessEnv', () => {
+  it('validator _phpSyntaxCheck passes envKeys option', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/agents/validator-agent.js'), 'utf8');
+    // Extract the _phpSyntaxCheck method
+    const methodStart = source.indexOf('async _phpSyntaxCheck()');
+    const methodEnd = source.indexOf('\n  async _artisan', methodStart);
+    const methodBody = source.slice(methodStart, methodEnd);
+    // Should use envKeys, NOT useProcessEnv (excluding comments)
+    assert.ok(methodBody.includes('envKeys:'), 'Should use envKeys option');
+    // Strip comments and check that useProcessEnv is not used as an actual option
+    const codeOnly = methodBody.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+    assert.ok(!codeOnly.includes('useProcessEnv'), 'Should NOT use useProcessEnv in _phpSyntaxCheck code');
+  });
+});
+
+// ── P2-005: class-strings detect() no /g flag ──
+
+describe('AUDIT-5 P2-005: class-strings detect() no /g flag', () => {
+  it('detect() returns consistent results across consecutive calls', async () => {
+    const classStrings = (await import('../src/transforms/class-strings.js')).default;
+    const php = `$model = 'App\\Models\\User';`;
+    // The bug: /g flag made .test() stateful — alternating true/false
+    // Call detect multiple times to verify consistency
+    const result1 = classStrings.detect(php);
+    const result2 = classStrings.detect(php);
+    const result3 = classStrings.detect(php);
+    const result4 = classStrings.detect(php);
+    const result5 = classStrings.detect(php);
+    assert.ok(result1, 'First call should detect');
+    assert.ok(result2, 'Second call should detect (was false with /g bug)');
+    assert.ok(result3, 'Third call should detect');
+    assert.ok(result4, 'Fourth call should detect');
+    assert.ok(result5, 'Fifth call should detect');
+  });
+
+  it('detect() regex does not use /g flag', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/transforms/class-strings.js'), 'utf8');
+    // Find the detect method's regex — should NOT have /g
+    const detectMatch = source.match(/detect\(content\)\s*\{[\s\S]*?\.test\(content\)/);
+    assert.ok(detectMatch, 'Should find detect method with .test()');
+    assert.ok(!detectMatch[0].includes('/g.test'), 'Regex should not have /g flag');
+    // More precise: check the actual regex literal
+    const regexMatch = source.match(/return\s+\/.*\/([gimsuy]*)\s*\.test/);
+    assert.ok(regexMatch, 'Should find regex.test pattern');
+    assert.ok(!regexMatch[1].includes('g'), 'Regex flags should not include g');
+  });
+});
+
+// ── P2-008: l11-structural readFileSync with try-catch ──
+
+describe('AUDIT-5 P2-008: l11-structural readFileSync with try-catch', () => {
+  it('returns empty results when Kernel.php is unreadable', async () => {
+    const { mkdirSync, writeFileSync, chmodSync, rmSync, existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const l11Structural = (await import('../src/transforms/l11-structural.js')).default;
+
+    const tmpDir = join(import.meta.dirname, '.tmp-l11-unreadable');
+    rmSync(tmpDir, { recursive: true, force: true });
+    mkdirSync(join(tmpDir, 'app', 'Http'), { recursive: true });
+    writeFileSync(join(tmpDir, 'app', 'Http', 'Kernel.php'), '<?php class Kernel {}');
+
+    // Make the file unreadable (only works on non-Windows)
+    // On Windows, we simulate by testing the source code structure instead
+    const isWindows = process.platform === 'win32';
+    if (!isWindows) {
+      chmodSync(join(tmpDir, 'app', 'Http', 'Kernel.php'), 0o000);
+      const result = l11Structural.run(tmpDir);
+      // Should return empty results instead of throwing
+      assert.deepEqual(result.filesDeleted, []);
+      assert.deepEqual(result.filesCreated, []);
+      assert.deepEqual(result.filesModified, []);
+      chmodSync(join(tmpDir, 'app', 'Http', 'Kernel.php'), 0o644);
+    }
+
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('source wraps readFileSync(kernelPath) in try-catch', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/transforms/l11-structural.js'), 'utf8');
+    // Find the run() method and check for try-catch around kernelContent
+    const runStart = source.indexOf('run(projectRoot');
+    const runBody = source.slice(runStart, runStart + 800);
+    assert.ok(runBody.includes('try {'), 'run() should have try block');
+    assert.ok(runBody.includes("readFileSync(kernelPath, 'utf-"), 'Should read kernelPath');
+    assert.ok(runBody.includes('catch (err)'), 'Should catch errors from readFileSync');
+    assert.ok(runBody.includes('return results'), 'Should return empty results on error');
+  });
+});
+
+// ── SEC-002: pre-processor safeWriteFile validates paths and creates backups ──
+
+describe('AUDIT-5 SEC-002: pre-processor safeWriteFile path validation + backups', () => {
+  it('runPreProcessing rejects path traversal in file writes', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/pre-processor.js'), 'utf8');
+    // safeWriteFile should validate path
+    assert.ok(source.includes('Path traversal blocked'), 'safeWriteFile should block traversal');
+    assert.ok(source.includes('resolve(absPath)'), 'Should resolve path before checking');
+  });
+
+  it('safeWriteFile creates backup before overwriting', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/pre-processor.js'), 'utf8');
+    // Extract safeWriteFile function
+    const fnStart = source.indexOf('function safeWriteFile');
+    const fnEnd = source.indexOf('\n}', fnStart);
+    const fnBody = source.slice(fnStart, fnEnd);
+    assert.ok(fnBody.includes('copyFileSync'), 'Should create backup via copyFileSync');
+    assert.ok(fnBody.includes('.shift'), 'Should store backup in .shift directory');
+    assert.ok(fnBody.includes('existsSync(absPath)'), 'Should check file exists before backup');
+  });
+
+  it('integration: runPreProcessing creates backups for modified files', async () => {
+    const { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { runPreProcessing } = await import('../src/pre-processor.js');
+
+    const tmpDir = join(import.meta.dirname, '.tmp-sec002-backup');
+    rmSync(tmpDir, { recursive: true, force: true });
+
+    // Create a file that class-strings transform will modify
+    mkdirSync(join(tmpDir, 'app', 'Models'), { recursive: true });
+    const testFile = join(tmpDir, 'app', 'Models', 'User.php');
+    const originalContent = `<?php\n$model = 'App\\Models\\Post';`;
+    writeFileSync(testFile, originalContent);
+
+    await runPreProcessing(tmpDir, '8', '11', { dryRun: false });
+
+    // Check backup was created
+    const backupPath = join(tmpDir, '.shift', 'backups', 'app', 'Models', 'User.php');
+    assert.ok(existsSync(backupPath), 'Backup should exist after modification');
+    const backup = readFileSync(backupPath, 'utf8');
+    assert.equal(backup, originalContent, 'Backup should contain original content');
+
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+
+// ── SEC-003: l11-structural validatePath before writes ──
+
+describe('AUDIT-5 SEC-003: l11-structural validatePath before writes', () => {
+  it('source has validatePath calls before file writes', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve('src/transforms/l11-structural.js'), 'utf8');
+    // Should have validatePath function
+    assert.ok(source.includes('function validatePath(projectRoot, fullPath)'), 'Should define validatePath');
+    // Should call validatePath before bootstrapAppPath write
+    assert.ok(source.includes('validatePath(projectRoot, bootstrapAppPath)'), 'Should validate bootstrapAppPath');
+    // Should call validatePath before providersPath write
+    assert.ok(source.includes('validatePath(projectRoot, providersPath)'), 'Should validate providersPath');
+  });
+
+  it('validatePath rejects paths outside projectRoot', async () => {
+    const { resolve, sep } = await import('node:path');
+    const { readFileSync } = await import('fs');
+    const source = readFileSync(resolve('src/transforms/l11-structural.js'), 'utf8');
+    // The validatePath function should throw on traversal
+    assert.ok(source.includes('Path traversal blocked'), 'validatePath should throw on traversal');
+    assert.ok(source.includes('!resolved.startsWith(prefix)'), 'Should check prefix match');
+  });
+
+  it('integration: l11-structural run() writes only within projectRoot', async () => {
+    const { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const l11Structural = (await import('../src/transforms/l11-structural.js')).default;
+
+    const tmpDir = join(import.meta.dirname, '.tmp-sec003-validate');
+    rmSync(tmpDir, { recursive: true, force: true });
+
+    // Set up minimal project structure
+    mkdirSync(join(tmpDir, 'app', 'Http', 'Middleware'), { recursive: true });
+    mkdirSync(join(tmpDir, 'app', 'Console'), { recursive: true });
+    mkdirSync(join(tmpDir, 'app', 'Exceptions'), { recursive: true });
+    mkdirSync(join(tmpDir, 'app', 'Providers'), { recursive: true });
+    mkdirSync(join(tmpDir, 'bootstrap'), { recursive: true });
+    mkdirSync(join(tmpDir, 'config'), { recursive: true });
+    mkdirSync(join(tmpDir, 'tests'), { recursive: true });
+
+    writeFileSync(join(tmpDir, 'app', 'Http', 'Kernel.php'), `<?php
+namespace App\\Http;
+use Illuminate\\Foundation\\Http\\Kernel as HttpKernel;
+class Kernel extends HttpKernel {
+    protected $middleware = [];
+    protected $middlewareGroups = ['web' => [], 'api' => []];
+    protected $middlewareAliases = [];
+}`);
+    writeFileSync(join(tmpDir, 'app', 'Console', 'Kernel.php'), '<?php\nclass Kernel {}');
+    writeFileSync(join(tmpDir, 'app', 'Exceptions', 'Handler.php'), '<?php\nclass Handler extends ExceptionHandler {}');
+    writeFileSync(join(tmpDir, 'bootstrap', 'app.php'), '<?php\n$app = new Application;');
+    writeFileSync(join(tmpDir, 'config', 'app.php'), "<?php\nreturn ['providers' => [App\\Providers\\AppServiceProvider::class]];");
+    writeFileSync(join(tmpDir, 'tests', 'TestCase.php'), `<?php
+namespace Tests;
+use Illuminate\\Foundation\\Testing\\TestCase as BaseTestCase;
+abstract class TestCase extends BaseTestCase {
+    use CreatesApplication;
+}`);
+
+    // Run should succeed without path-traversal errors
+    const result = l11Structural.run(tmpDir);
+    assert.ok(result.filesModified.includes('bootstrap/app.php'), 'Should modify bootstrap/app.php');
+    assert.ok(result.filesCreated.includes('bootstrap/providers.php'), 'Should create providers.php');
+
+    // All created/modified files should be within tmpDir
+    for (const f of [...result.filesCreated, ...result.filesModified]) {
+      const full = join(tmpDir, f);
+      assert.ok(existsSync(full), `${f} should exist within project`);
+    }
+
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════
+// Run #5 Regression Tests — blueprint-exporter dirname fix (P2-NF2)
+// ══════════════════════════════════════════════════════════════════
+
+// ── P2-NF2: blueprint-exporter uses dirname() not join('..') ─────
+
+describe('Run #5 P2-NF2: blueprint-exporter uses dirname() for parent directory', () => {
+  it('source imports dirname from node:path', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const src = readFileSync(resolve('src/blueprint-exporter.js'), 'utf8');
+
+    assert.ok(src.includes('dirname'), 'Should import dirname');
+    assert.ok(src.includes("from 'node:path'"),
+      'dirname should come from node:path');
+  });
+
+  it('source uses dirname(absOutputPath) for outputDir', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const src = readFileSync(resolve('src/blueprint-exporter.js'), 'utf8');
+
+    assert.ok(src.includes('dirname(absOutputPath)'),
+      'Should compute outputDir via dirname(absOutputPath)');
+    // The old buggy pattern should not exist
+    assert.ok(!src.includes("join(absOutputPath, '..')"),
+      'Should NOT use join(absOutputPath, \'..\') — that was the bug');
+  });
+
+  it('outputDir resolves correctly for nested output paths', async () => {
+    const { dirname, join } = await import('node:path');
+
+    // Simulate the fixed logic: dirname gives the parent directory
+    const projectRoot = '/project';
+    const outputPath = '.shift/blueprint.yaml';
+    const absOutputPath = join(projectRoot, outputPath);
+    const outputDir = dirname(absOutputPath);
+
+    // dirname('/project/.shift/blueprint.yaml') => '/project/.shift'
+    assert.ok(outputDir.endsWith('.shift'), `outputDir should end with .shift, got: ${outputDir}`);
+    assert.ok(!outputDir.includes('blueprint.yaml'), 'outputDir should not include the filename');
+  });
+
+  it('outputDir resolves correctly for root-level output paths', async () => {
+    const { dirname, join } = await import('node:path');
+
+    // When output is at root level e.g. 'blueprint.yaml'
+    const projectRoot = '/project';
+    const outputPath = 'blueprint.yaml';
+    const absOutputPath = join(projectRoot, outputPath);
+    const outputDir = dirname(absOutputPath);
+
+    // dirname('/project/blueprint.yaml') => '/project'
+    assert.ok(outputDir.endsWith('project'), `outputDir should be the project root, got: ${outputDir}`);
+  });
+
+  it('outputDir resolves correctly for deeply nested output paths', async () => {
+    const { dirname, join } = await import('node:path');
+
+    const projectRoot = '/project';
+    const outputPath = 'storage/app/exports/blueprint.yaml';
+    const absOutputPath = join(projectRoot, outputPath);
+    const outputDir = dirname(absOutputPath);
+
+    // dirname should give '/project/storage/app/exports'
+    assert.ok(outputDir.endsWith('exports'), `outputDir should end with exports, got: ${outputDir}`);
+    assert.ok(!outputDir.includes('blueprint.yaml'), 'outputDir should not include the filename');
+  });
+
+  it('generateBlueprintYaml writes to nested output path without error', async () => {
+    const { mkdirSync, rmSync, existsSync, readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { generateBlueprintYaml } = await import('../src/blueprint-exporter.js');
+
+    const tmpDir = join(import.meta.dirname, '.tmp-blueprint-dirname');
+    rmSync(tmpDir, { recursive: true, force: true });
+    mkdirSync(join(tmpDir, 'app', 'Models'), { recursive: true });
+
+    try {
+      // Use a nested output path to verify dirname creates correct parent
+      const result = await generateBlueprintYaml(tmpDir, {
+        outputPath: 'output/deep/blueprint.yaml',
+      });
+
+      const absPath = join(tmpDir, 'output', 'deep', 'blueprint.yaml');
+      assert.ok(existsSync(absPath), 'File should exist at the nested output path');
+      const content = readFileSync(absPath, 'utf8');
+      assert.ok(content.includes('# Blueprint YAML'), 'Written file should contain YAML header');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════
+// Run #6 Regression Tests
+// ══════════════════════════════════════════════════════════════════
+
+// ── R6-003: _postDependencyCleanup checks execCommand result.ok ──
+
+describe('AUDIT-6 R6-003: _postDependencyCleanup checks result.ok instead of try/catch', () => {
+  it('source uses result.ok check for autoload and discover commands', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const src = readFileSync(resolve('src/orchestrator.js'), 'utf8');
+    const methodStart = src.indexOf('async _postDependencyCleanup()');
+    assert.ok(methodStart !== -1, '_postDependencyCleanup method should exist');
+    const methodEnd = src.indexOf('\n  }', methodStart + 1);
+    const methodBody = src.slice(methodStart, methodEnd);
+
+    assert.ok(methodBody.includes('autoloadResult.ok'), 'Should check autoloadResult.ok');
+    assert.ok(methodBody.includes('discoverResult.ok'), 'Should check discoverResult.ok');
+  });
+
+  it('does not wrap execCommand in try/catch for autoload or discover', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const src = readFileSync(resolve('src/orchestrator.js'), 'utf8');
+    const methodStart = src.indexOf('async _postDependencyCleanup()');
+    const methodEnd = src.indexOf('\n  }', methodStart + 1);
+    const methodBody = src.slice(methodStart, methodEnd);
+
+    // The section after cache cleanup should not have try/catch around execCommand
+    const autoloadSection = methodBody.slice(methodBody.indexOf('Regenerate autoloader'));
+    assert.ok(!autoloadSection.includes('try {'), 'Should not wrap execCommand calls in try/catch');
+  });
+
+  it('logs warning when dump-autoload fails', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const src = readFileSync(resolve('src/orchestrator.js'), 'utf8');
+    const methodStart = src.indexOf('async _postDependencyCleanup()');
+    const methodEnd = src.indexOf('\n  }', methodStart + 1);
+    const methodBody = src.slice(methodStart, methodEnd);
+
+    assert.ok(methodBody.includes("logger.warn('Orchestrator', `dump-autoload failed"),
+      'Should log warning when dump-autoload fails');
+  });
+
+  it('logs debug when package:discover fails', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const src = readFileSync(resolve('src/orchestrator.js'), 'utf8');
+    const methodStart = src.indexOf('async _postDependencyCleanup()');
+    const methodEnd = src.indexOf('\n  }', methodStart + 1);
+    const methodBody = src.slice(methodStart, methodEnd);
+
+    assert.ok(methodBody.includes("logger.debug('Orchestrator', `package:discover skipped"),
+      'Should log debug when package:discover fails');
+  });
+});
+
+// ── R6-004: conformity-checker PHP 13 min corrected to ^8.3 ──
+
+describe('AUDIT-6 R6-004: conformity-checker expectedPhp[13] is ^8.3', () => {
+  it('PHP version map has ^8.3 for version 13', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const src = readFileSync(resolve('src/conformity-checker.js'), 'utf8');
+
+    assert.ok(src.includes("'13': '^8.3'"), 'expectedPhp should map 13 to ^8.3');
+    assert.ok(!src.includes("'13': '^8.2'"), 'expectedPhp should NOT map 13 to ^8.2');
+  });
+
+  it('checking PHP conformity for v13 with ^8.2 reports an issue', async () => {
+    const { mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const { checkConformity } = await import('../src/conformity-checker.js');
+
+    const tmpDir = join(tmpdir(), `shift-r6004-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    mkdirSync(tmpDir, { recursive: true });
+
+    try {
+      writeFileSync(join(tmpDir, 'composer.json'), JSON.stringify({
+        require: { php: '^8.2', 'laravel/framework': '^13.0' },
+      }));
+
+      const report = await checkConformity(tmpDir, '13', { autoFix: false });
+      const phpIssue = report.issues.find(i =>
+        i.category === 'composer' && i.issue.includes('PHP constraint')
+      );
+      assert.ok(phpIssue, 'Should flag PHP ^8.2 as too low for Laravel 13');
+      assert.ok(phpIssue.issue.includes('^8.2'), 'Issue should mention the declared constraint');
+      assert.ok(phpIssue.issue.includes('^8.3'), 'Issue should mention the expected constraint');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('conformity-checker expectedPhp matches upgrade-matrix phpMin for all versions', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+
+    const conformitySrc = readFileSync(resolve('src/conformity-checker.js'), 'utf8');
+    const matrixSrc = readFileSync(resolve('config/upgrade-matrix.js'), 'utf8');
+
+    // Extract expectedPhp entries from conformity-checker
+    const expectedPhpMatch = conformitySrc.match(/const expectedPhp = \{([^}]+)\}/);
+    assert.ok(expectedPhpMatch, 'Should find expectedPhp definition');
+
+    // Parse each version mapping from expectedPhp
+    const entries = [...expectedPhpMatch[1].matchAll(/'(\d+)':\s*'([^^]*\^[\d.]+)'/g)];
+    assert.ok(entries.length >= 5, `Should have at least 5 version entries, found ${entries.length}`);
+    for (const [, version, constraint] of entries) {
+      // For each version, find the corresponding phpMin in upgrade-matrix
+      const matrixPattern = new RegExp(`'\\d+->${version}':[\\s\\S]*?phpMin:\\s*'([^']+)'`);
+      const matrixMatch = matrixSrc.match(matrixPattern);
+      if (matrixMatch) {
+        const matrixPhpMin = matrixMatch[1];
+        const conformityMin = constraint.replace(/[^0-9.]/g, '');
+        assert.equal(conformityMin, matrixPhpMin,
+          `conformity-checker expectedPhp['${version}'] min (${conformityMin}) should match upgrade-matrix phpMin (${matrixPhpMin})`);
+      }
+    }
   });
 });

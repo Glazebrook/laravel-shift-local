@@ -123,15 +123,18 @@ export class ValidatorAgent extends BaseAgent {
     for (let i = 0; i < files.length; i += batchSize) {
       const batch = files.slice(i, i + batchSize);
       await Promise.allSettled(batch.map(async (f) => {
-        try {
-          // SEC-010 FIX: Centralised via shell.js — no shell by default
-          await execCommand('php', ['-l', join(this.projectPath, f)], {
-            timeout: 10_000,
-            allowUnsafeArgs: true, // file paths may contain special chars
-            useProcessEnv: true,
-          });
-        } catch (err) {
-          errors.push({ file: f, error: err.stderr || err.message });
+        // SEC-010 FIX: Centralised via shell.js — no shell by default
+        // P1-001 FIX: execCommand returns {ok, stderr} — it does NOT throw on failure.
+        // Check result.ok instead of using try/catch.
+        // P2-001 FIX: Use envKeys allowlist instead of useProcessEnv to avoid leaking
+        // API keys and other secrets into php -l subprocesses.
+        const result = await execCommand('php', ['-l', join(this.projectPath, f)], {
+          timeout: 10_000,
+          allowUnsafeArgs: true, // file paths may contain special chars
+          envKeys: ['PHP_INI_SCAN_DIR'],
+        });
+        if (!result.ok) {
+          errors.push({ file: f, error: result.stderr || 'Unknown syntax error' });
         }
       }));
       checked += batch.length;

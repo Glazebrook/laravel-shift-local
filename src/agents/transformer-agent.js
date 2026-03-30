@@ -227,12 +227,14 @@ export class TransformerAgent extends BaseAgent {
       const toVersion = this.stateManager?.get('toVersion');
       const chain = getTransitionChain(fromVersion, toVersion);
 
-      for (let i = 0; i < chain.length - 1; i++) {
-        const change = getFileChange(chain[i], chain[i + 1], filepath);
+      // P1-002 FIX: getTransitionChain returns [{from, to, manifest}] objects.
+      // getFileChange expects string version numbers, not chain objects.
+      for (const step of chain) {
+        const change = getFileChange(step.from, step.to, filepath);
         if (change?.type === 'removed') {
           // File should be deleted
           const tools = this.fileTools.getAgentTools();
-          await tools.handlers.delete_file({ filepath, reason: `Removed in Laravel ${chain[i + 1]} (content filter fallback)` });
+          await tools.handlers.delete_file({ filepath, reason: `Removed in Laravel ${step.to} (content filter fallback)` });
           return { ok: true, changes: [`Deleted ${filepath} (reference data)`], fallback: 'reference', deletedFiles: [filepath] };
         }
       }

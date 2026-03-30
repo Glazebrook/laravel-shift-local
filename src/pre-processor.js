@@ -6,10 +6,31 @@
  * eliminating LLM hallucination risk for well-defined changes.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs';
+import { join, dirname, basename, resolve, sep } from 'node:path';
 import { glob } from 'glob';
 import { getApplicableTransforms } from './transforms/index.js';
+
+/**
+ * SEC-002 FIX: Back up a file before writing and validate path stays within project root.
+ */
+function safeWriteFile(projectRoot, absPath, content) {
+  const prefix = projectRoot + (projectRoot.endsWith(sep) ? '' : sep);
+  const resolved = resolve(absPath);
+  if (resolved !== projectRoot && !resolved.startsWith(prefix)) {
+    throw new Error(`Path traversal blocked: ${absPath}`);
+  }
+
+  // Create backup before overwriting
+  if (existsSync(absPath)) {
+    const relPath = absPath.startsWith(prefix) ? absPath.slice(prefix.length) : basename(absPath);
+    const backupDir = join(projectRoot, '.shift', 'backups', dirname(relPath));
+    mkdirSync(backupDir, { recursive: true });
+    copyFileSync(absPath, join(backupDir, basename(absPath)));
+  }
+
+  writeFileSync(absPath, content, 'utf8');
+}
 
 /**
  * Run all applicable deterministic transforms on the project.
@@ -112,7 +133,8 @@ async function runSingleTransform(transform, projectRoot, options = {}) {
     }
 
     if (!dryRun) {
-      writeFileSync(absPath, transformResult.content, 'utf8');
+      // SEC-002 FIX: Use safeWriteFile for backup creation + path validation
+      safeWriteFile(projectRoot, absPath, transformResult.content);
     }
   }
 

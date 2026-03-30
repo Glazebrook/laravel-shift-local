@@ -6,7 +6,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { glob } from 'glob';
 
 /**
@@ -39,7 +39,7 @@ export async function generateBlueprintYaml(projectRoot, options = {}) {
 
   // Write to file
   const absOutputPath = join(projectRoot, outputPath);
-  const outputDir = join(absOutputPath, '..');
+  const outputDir = dirname(absOutputPath);
   if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
   writeFileSync(absOutputPath, yaml, 'utf8');
 

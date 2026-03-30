@@ -1003,28 +1003,28 @@ export class Orchestrator {
     }
 
     // Regenerate autoloader
-    try {
-      await execCommand('composer', ['dump-autoload', '--no-interaction'], {
-        cwd: this.projectPath,
-        timeout: 60_000,
-        useProcessEnv: true,
-      });
+    const autoloadResult = await execCommand('composer', ['dump-autoload', '--no-interaction'], {
+      cwd: this.projectPath,
+      timeout: 60_000,
+      useProcessEnv: true,
+    });
+    if (autoloadResult.ok) {
       await this.logger.info('Orchestrator', 'Regenerated autoloader');
-    } catch (err) {
-      await this.logger.warn('Orchestrator', `dump-autoload failed: ${err.message}`);
+    } else {
+      await this.logger.warn('Orchestrator', `dump-autoload failed: ${autoloadResult.stderr || 'unknown error'}`);
     }
 
     // Regenerate package manifests
-    try {
-      await execCommand('php', ['artisan', 'package:discover', '--ansi'], {
-        cwd: this.projectPath,
-        timeout: 30_000,
-        useProcessEnv: true,
-      });
+    const discoverResult = await execCommand('php', ['artisan', 'package:discover', '--ansi'], {
+      cwd: this.projectPath,
+      timeout: 30_000,
+      useProcessEnv: true,
+    });
+    if (discoverResult.ok) {
       await this.logger.info('Orchestrator', 'Regenerated package discovery');
-    } catch (err) {
+    } else {
       // May fail if artisan can't boot yet — transforms will fix it
-      await this.logger.debug('Orchestrator', `package:discover skipped: ${err.message}`);
+      await this.logger.debug('Orchestrator', `package:discover skipped: ${discoverResult.stderr || 'unknown error'}`);
     }
   }
 

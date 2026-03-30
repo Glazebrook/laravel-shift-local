@@ -13,7 +13,9 @@ export default {
   detect(content) {
     // Match strings like 'App\Models\User' or "App\Models\User"
     // Must have at least one backslash (namespace separator)
-    return /['"]App\\[A-Z][^'"]*['"]/g.test(content);
+    // P2-005 FIX: Removed /g flag — .test() with /g is stateful and causes
+    // false negatives on repeated calls (e.g. detect() called before transform()).
+    return /['"]App\\[A-Z][^'"]*['"]/.test(content);
   },
 
   transform(content) {

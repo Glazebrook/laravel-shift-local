@@ -22,7 +22,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync, rmdirSync, copyFileSync } from 'node:fs';
-import { join, dirname, basename } from 'node:path';
+import { join, dirname, basename, resolve, sep } from 'node:path';
 
 // Default Laravel 10 global middleware (built into L11 framework)
 const DEFAULT_GLOBAL_MIDDLEWARE = [
@@ -354,10 +354,23 @@ function cleanEmptyDir(dirPath) {
 }
 
 /**
+ * SEC-003 FIX: Validate that a resolved path stays within projectRoot.
+ */
+function validatePath(projectRoot, fullPath) {
+  const prefix = projectRoot + (projectRoot.endsWith(sep) ? '' : sep);
+  const resolved = resolve(fullPath);
+  if (resolved !== projectRoot && !resolved.startsWith(prefix)) {
+    throw new Error(`Path traversal blocked: ${fullPath}`);
+  }
+}
+
+/**
  * Back up a file to .shift/backups/ before deleting.
+ * SEC-003 FIX: Added path validation to prevent writes outside projectRoot.
  */
 function backupFile(projectRoot, relPath) {
   const fullPath = join(projectRoot, relPath);
+  validatePath(projectRoot, fullPath);
   if (!existsSync(fullPath)) return;
 
   const backupDir = join(projectRoot, '.shift', 'backups', dirname(relPath));
@@ -405,7 +418,15 @@ export default {
 
     // ── STEP 1: Extract custom middleware from Kernel.php ──
     const kernelPath = join(projectRoot, 'app', 'Http', 'Kernel.php');
-    const kernelContent = readFileSync(kernelPath, 'utf-8');
+    // P2-008 FIX: Wrap in try-catch so an unreadable Kernel.php doesn't crash
+    // the entire pre-processing phase. Return empty results and let the LLM handle it.
+    let kernelContent;
+    try {
+      kernelContent = readFileSync(kernelPath, 'utf-8');
+    } catch (err) {
+      // Kernel.php exists (detect() passed) but is unreadable — return empty results
+      return results;
+    }
 
     const customMiddleware = extractCustomMiddleware(kernelContent);
     results.customMiddleware = customMiddleware;
@@ -451,6 +472,7 @@ export default {
     }
 
     const bootstrapAppPath = join(projectRoot, 'bootstrap', 'app.php');
+    validatePath(projectRoot, bootstrapAppPath);
     backupFile(projectRoot, 'bootstrap/app.php');
     writeFileSync(bootstrapAppPath, newBootstrapApp, 'utf-8');
     results.filesModified.push('bootstrap/app.php');
@@ -460,6 +482,7 @@ export default {
     const providersContent = generateProvidersFile(allProviders);
 
     const providersPath = join(projectRoot, 'bootstrap', 'providers.php');
+    validatePath(projectRoot, providersPath);
     mkdirSync(dirname(providersPath), { recursive: true });
     writeFileSync(providersPath, providersContent, 'utf-8');
     results.filesCreated.push('bootstrap/providers.php');
@@ -505,6 +528,7 @@ export default {
 
     for (const fileToDelete of filesToDelete) {
       const fullPath = join(projectRoot, fileToDelete);
+      validatePath(projectRoot, fullPath);
       if (existsSync(fullPath)) {
         backupFile(projectRoot, fileToDelete);
         unlinkSync(fullPath);
@@ -529,6 +553,7 @@ export default {
         .replace(/\s*use\s+CreatesApplication;\s*\n?/g, '');
 
       if (testCase !== original) {
+        validatePath(projectRoot, testCasePath);
         writeFileSync(testCasePath, testCase, 'utf-8');
         results.filesModified.push('tests/TestCase.php');
       }

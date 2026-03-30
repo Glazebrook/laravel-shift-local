@@ -1,9 +1,9 @@
 # Audit Report: Laravel Shift Local
 
-**Date**: 2026-03-28
-**Audited by**: Enterprise Code Audit Pipeline (7-agent) -- Run #3
+**Date**: 2026-03-30
+**Audited by**: Enterprise Code Audit Pipeline (7-agent) -- Run #6
 **Project**: Laravel Shift Local -- automated Laravel upgrade tool
-**Scope**: Full codebase (17 source files, 8 test files)
+**Scope**: Full codebase (42 source files, 20 test files)
 
 ---
 
@@ -11,53 +11,55 @@
 
 | Metric | Value |
 |---|---|
-| Source files in scope | 17 |
-| Files analysed (audit) | 17 / 17 (100%) |
-| Files reviewed (security) | 17 / 17 (100%) |
-| Total findings (new) | 14 (7 audit + 7 security) |
+| Source files in scope | 42 (36 src/ + 1 bin/ + 1 config/ + 1 eslint + 3 scripts) |
+| Files analysed (audit) | 42 / 42 (100%) |
+| Files reviewed (security) | 42 / 42 (100%) |
+| Total findings (new) | 17 (10 audit + 7 security) |
 | P0 Critical | 0 |
 | P1 High | 0 |
-| P2 Medium | 0 |
-| P3 Low | 14 |
-| Security findings (new) | 7 (all P3 observations) |
-| Fixes implemented | 4 (production hardening) |
-| Fixes verified | 4 / 4 (100%) |
+| P2 Medium | 5 (all observations) |
+| P3 Low | 12 (2 fix-required + 10 observations) |
+| Security findings (new) | 7 (all observations) |
+| Fixes implemented | 2 / 2 (100%) |
+| Fixes verified | 2 / 2 (100%) |
 | Fixes amended | 0 |
 | Fixes rejected | 0 |
-| Observations (no fix needed) | 10 (remaining after 4 fixed) |
-| New tests added | 28 |
-| Baseline tests | 221 |
-| Final tests | 249 |
-| Test pass rate | 100% (249/249) |
-| Files modified | 10 |
-| Prior audit fixes verified | 18 / 18 intact |
+| Observations (not fixed) | 15 |
+| New tests added | 7 |
+| Baseline tests | 614 |
+| Final tests | 621 |
+| Test pass rate | 100% (621/621) |
+| Files modified | 3 |
+| Prior audit fixes verified (Run #3) | 4 / 4 intact |
+| Prior audit fixes verified (Run #4) | 7 / 7 intact |
+| Prior audit fixes verified (Run #5) | 1 / 1 intact |
 | Prior audit regressions | 0 |
 
 ### Overall Health Assessment: Excellent
 
-The codebase has been through 3 full audit cycles with zero regressions across all prior fixes. This run resolved 4 long-standing observations that had been flagged in every prior audit: `node:` prefix adoption (A2-010), API timeout timer cleanup (A2-011), minimal PHP subprocess environment (SEC-024), and dead code removal (A3-003). All 14 new findings are P3 observations representing theoretical risks adequately mitigated by existing controls. Test coverage improved from 221 to 249 (+28) with comprehensive regression tests for all fixes. The codebase is production-ready.
+No P0 or P1 findings were discovered in Run #6, continuing the strong trend from Runs #3-#5. The two fix-required items were both P3: dead catch blocks in `_postDependencyCleanup` (since `execCommand` returns results rather than throwing) and a PHP version inconsistency between the conformity checker and upgrade matrix for Laravel 13. All 12 prior fixes from Runs #3-#5 remain intact with zero regressions. All 11 prior observations were re-evaluated and remain valid with unchanged revisit conditions. The 7 new security findings are all observations reflecting defense-in-depth opportunities rather than exploitable vulnerabilities. Test coverage grew from 614 to 621 with targeted regression tests. The codebase is in excellent shape for production use.
 
 ---
 
 ## 2. Top 3 Highest-Risk Issues
 
-### 1. process.env Spread Leaks API Key to PHP Subprocesses (SEC-024) -- FIXED
+### 1. Composer Environment Leak via Malicious Scripts (SEC-102) -- Observation
 
-**File**: `src/agents/validator-agent.js`
-**Risk**: `{ ...process.env, APP_ENV: 'testing' }` passed the full environment (including ANTHROPIC_API_KEY) to PHP artisan subprocesses. Malicious PHP code in the target project could read the API key.
-**Resolution**: Replaced with `ENV_ALLOWLIST` filter that only passes 16 necessary environment variables (PATH, HOME, USERPROFILE, SYSTEMROOT, TEMP, TMP, PHP_INI_SCAN_DIR, COMPOSER_HOME, APP_ENV, APP_KEY, DB_CONNECTION, DB_HOST, DB_PORT, DB_DATABASE, DB_USERNAME, DB_PASSWORD). Covered by 5 new tests.
+**File**: `src/agents/dependency-agent.js:79`
+**Risk**: Composer subprocesses receive the full process environment including `ANTHROPIC_API_KEY` via `useProcessEnv: true`. A malicious `composer.json` in the target project could define a `post-update-cmd` script that exfiltrates the API key. The `--no-scripts` flag relies on the LLM including it rather than being enforced at the handler level.
+**Status**: Observation -- requires deliberately malicious target project. Mitigated by subcommand allowlist.
 
-### 2. API Timeout Timers Prevent Graceful Shutdown (A2-011) -- FIXED
+### 2. Indirect Prompt Injection Chain (SEC-101) -- Observation
 
-**File**: `src/agents/base-agent.js`
-**Risk**: `_callWithRetry` timeout timers (up to 300s) kept the process alive during graceful shutdown. After Ctrl+C, the process would hang until all pending API timeouts fired.
-**Resolution**: Added `.unref()` to both `setTimeout` calls in `_callWithRetry`. Process can now exit cleanly on SIGINT even with pending API timeouts. Covered by 3 new tests.
+**File**: `src/agents/transformer-agent.js:301-326`, `src/agents/planner-agent.js:170-178`
+**Risk**: A malicious PHP file could influence the Analyzer's output, which flows to the Planner's instructions, which are interpolated into the Transformer's prompt with file write capabilities. This is a second-order injection chain.
+**Status**: Observation -- mitigated by FileTools write guards, sensitive file blocking, and multi-agent architecture that limits each agent's capabilities.
 
-### 3. LLM-supplied Composer Args with shell:true on Windows (SEC-023) -- Observation
+### 3. Unbounded File Reads in postTransformChecks (SEC-105) -- Observation
 
-**File**: `src/agents/dependency-agent.js`
-**Risk**: The `run_composer` tool uses `shell:true` on Windows. `SAFE_ARG_RE` blocks all dangerous metacharacters but allows `^` (cmd.exe escape character).
-**Mitigation**: `execa` v9 quotes array arguments before passing to shell. Command allowlist + regex validation provide defence-in-depth. Risk is residual and low.
+**File**: `src/orchestrator.js:48-139`
+**Risk**: `postTransformChecks` reads all PHP files in `config/` using `readFileSync` with no size limit, bypassing FileTools' 1MB read guard. A multi-GB file at a known path could cause OOM.
+**Status**: Observation -- only affects local upgrade tool process; no remote impact.
 
 ---
 
@@ -67,32 +69,31 @@ The codebase has been through 3 full audit cycles with zero regressions across a
 
 | ID | Severity | Category | File(s) | Title | Class | Status |
 |---|---|---|---|---|---|---|
-| A3-001 | P3 | Shell Safety | `src/orchestrator.js` | PowerShell drive letter validation on UNC paths | Observation | N/A |
-| A3-002 | P3 | Reliability | `src/file-tools.js` | writeFile uses non-atomic direct write | Observation | N/A |
-| A3-003 | P3 | Dead Code | `src/git-manager.js` | SAFE_ARG_RE unused in validation | Fix Required | **Fixed** |
-| A3-004 | P3 | Reliability | `src/agents/base-agent.js` | Rate limiter singleton not resettable for tests | Observation | N/A |
-| A3-005 | P3 | Code Quality | `src/agents/analyzer-agent.js` | _verifyInstalledVersion bypasses FileTools | Observation | N/A |
-| A3-006 | P3 | Shell Safety | `src/agents/dependency-agent.js` | Composer arg validation with spaces on Windows | Observation | N/A |
-| A3-007 | P3 | Reliability | `src/agents/validator-agent.js` | PHP syntax check shell:false vs artisan shell:true | Observation | N/A |
+| R6-001 | P2 Medium | Resource Cleanup | `src/orchestrator.js` | CI heartbeat interval could leak if _runPhaseWithRetry throws | Observation | N/A |
+| R6-002 | P2 Medium | Input Validation | `src/conformity-checker.js` | applyAutoFixes uses join() without traversal check | Observation | N/A |
+| R6-003 | P3 Low | Error Handling | `src/orchestrator.js` | _postDependencyCleanup dead catch blocks (execCommand never throws) | Fix Required | **Fixed** |
+| R6-004 | P3 Low | Hardcoded Values | `src/conformity-checker.js` | PHP 13 min should be ^8.3 (not ^8.2), inconsistent with upgrade-matrix | Fix Required | **Fixed** |
+| R6-005 | P3 Low | Code Quality | `src/agents/validator-agent.js` | Missing await on logger call (line 168) | Observation | N/A |
+| R6-006 | P3 Low | Dead Code | `src/transforms/l11-structural.js` | Empty if-block in isDefaultMiddlewareStub loop body | Observation | N/A |
+| R6-007 | P2 Medium | Shell Safety | `src/orchestrator.js` | PowerShell interpolation in _checkDiskSpace (validated to single A-Z) | Observation | N/A |
+| R6-008 | P2 Medium | Exposure | `src/style-formatter.js` | useProcessEnv leaks full env to style formatter | Observation | N/A |
+| R6-009 | P3 Low | Input Validation | `src/transforms/rules-arrays.js` | Regex may match pipe-delimited strings outside validation context | Observation | N/A |
+| R6-010 | P3 Low | Error Handling | `src/orchestrator.js` | composer.json parse error message slightly misleading | Observation | N/A |
 
 ### Security Findings (Agent 3)
 
 | ID | Severity | Category | File(s) | Title | Class | Status |
 |---|---|---|---|---|---|---|
-| SEC-031 | P3 | Injection | `src/orchestrator.js` | PowerShell command string interpolation | Observation | N/A |
-| SEC-032 | P3 | Race | `src/file-tools.js` | TOCTOU in file_exists check | Observation | N/A |
-| SEC-033 | P3 | LLM Trust | `src/agents/base-agent.js` | tool_use_id accepted without validation | Observation | N/A |
-| SEC-034 | P3 | Exposure | `src/agents/validator-agent.js` | process.env spread leaks API key | Fix Required | **Fixed** |
-| SEC-035 | P3 | Injection | Multiple | Composer/artisan shell:true on Windows | Observation | N/A |
-| SEC-036 | P3 | LLM Trust | `src/file-tools.js` | Sensitive file blocklist basename matching | Observation | N/A |
-| SEC-037 | P3 | LLM Trust | `src/file-tools.js` | No content validation on LLM file writes | Observation | N/A |
+| SEC-101 | P3 Low | LLM Trust | `src/agents/transformer-agent.js`, `src/agents/planner-agent.js` | Indirect prompt injection chain via planner instructions | Observation | N/A |
+| SEC-102 | P2 Medium | Exposure | `src/agents/dependency-agent.js` | Composer env leak via malicious scripts (--no-scripts not enforced) | Observation | N/A |
+| SEC-103 | P3 Low | State Integrity | `src/state-manager.js` | State validateState() doesn't validate field types | Observation | N/A |
+| SEC-104 | P3 Low | Injection | `scripts/build-reference-diffs.js` | Build script uses execSync with string interpolation (hardcoded inputs) | Observation | N/A |
+| SEC-105 | P2 Medium | DoS | `src/orchestrator.js` | postTransformChecks reads config files without size limit | Observation | N/A |
+| SEC-106 | P3 Low | ReDoS | `src/transforms/l11-structural.js`, `src/blueprint-exporter.js` | Regex patterns with [\s\S]*? on file content | Observation | N/A |
+| SEC-107 | P3 Low | Information Disclosure | `src/errors.js` | ParseError stores rawPreview of file content | Observation | N/A |
 
-### Production Hardening (from prior observation backlog)
-
-| ID | Severity | Category | File(s) | Title | Class | Status |
-|---|---|---|---|---|---|---|
-| A2-010 | P3 | Code Quality | All source files | Adopt node: prefix for builtins | Fix Required | **Fixed** |
-| A2-011 | P2 | Resource Cleanup | `src/agents/base-agent.js` | _callWithRetry timeout not unref'd | Fix Required | **Fixed** |
+**npm audit**: 0 vulnerabilities
+**Overall security posture**: STRONG
 
 ---
 
@@ -100,119 +101,141 @@ The codebase has been through 3 full audit cycles with zero regressions across a
 
 | File | Fixes Applied | Changes |
 |---|---|---|
-| `bin/shift.js` | A2-010 | `path` -> `node:path`, `fs` -> `node:fs`, `module` -> `node:module` |
-| `src/orchestrator.js` | A2-010 | `fs` -> `node:fs`, `path` -> `node:path`, `child_process` -> `node:child_process` |
-| `src/file-tools.js` | A2-010 | `fs` -> `node:fs`, `path` -> `node:path`, `crypto` -> `node:crypto` |
-| `src/logger.js` | A2-010 | `fs` -> `node:fs`, `fs/promises` -> `node:fs/promises`, `path` -> `node:path` |
-| `src/state-manager.js` | A2-010 | `fs` -> `node:fs`, `path` -> `node:path` |
-| `src/agents/base-agent.js` | A2-011 | Added `.unref()` to both setTimeout calls in `_callWithRetry` |
-| `src/agents/analyzer-agent.js` | A2-010 | `fs` -> `node:fs`, `path` -> `node:path` |
-| `src/agents/validator-agent.js` | A2-010, SEC-034 | `path` -> `node:path`; replaced `...process.env` with `ENV_ALLOWLIST` filter |
-| `src/agents/reporter-agent.js` | A2-010 | `path` -> `node:path` |
-| `src/git-manager.js` | A3-003 | Removed unused `SAFE_ARG_RE` constant |
-| `test/audit-fixes.test.js` | -- | 28 new regression tests for all 4 fixes |
+| `src/orchestrator.js` | R6-003 | Replaced dead try/catch blocks with `execCommand` result `.ok` checking |
+| `src/conformity-checker.js` | R6-004 | Changed `expectedPhp['13']` from `'^8.2'` to `'^8.3'` |
+| `test/audit-fixes.test.js` | -- | 7 new regression tests for R6-003 and R6-004 fixes |
 
 ---
 
 ## 5. New Tests Added
 
-**File**: `test/audit-fixes.test.js` -- 28 new tests:
+**File**: `test/audit-fixes.test.js` -- 7 new tests under "Run #6 Regression Tests":
 
 | Finding | Tests | Description |
 |---|---|---|
-| A2-010 | 15 | Verify all 15 source files use node: prefix for builtin imports |
-| A2-011 | 3 | Verify .unref() on setTimeout in _callWithRetry, both code paths |
-| SEC-034 | 5 | Verify ENV_ALLOWLIST, ANTHROPIC_API_KEY excluded, filtering logic |
-| A3-003 | 5 | Verify SAFE_ARG_RE removed from git-manager, SAFE_SPACED_RE retained |
+| R6-003 | 1 | Verify source uses `autoloadResult.ok` and `discoverResult.ok` checks |
+| R6-003 | 1 | Verify no try/catch wrapping execCommand for autoload/discover |
+| R6-003 | 1 | Verify warning logged when dump-autoload fails |
+| R6-003 | 1 | Verify debug logged when package:discover fails |
+| R6-004 | 1 | Verify PHP version map has `'^8.3'` for version 13 (not `'^8.2'`) |
+| R6-004 | 1 | Integration test: checkConformity with v13 + `^8.2` reports composer issue |
+| R6-004 | 1 | Cross-validation: conformity-checker expectedPhp matches upgrade-matrix phpMin |
 
-**Baseline**: 221 tests passing | **Final**: 249 tests passing (+28) | **Pass rate**: 100%
+**Baseline**: 614 tests passing | **Final**: 621 tests passing (+7) | **Pass rate**: 100%
 
 ---
 
 ## 6. Observations (Not Fixed)
 
-### A3-001: PowerShell Drive Letter Validation on UNC Paths (P3)
-**File**: `src/orchestrator.js:547-556`
-**Rationale**: `driveLetter` validated by `/^[A-Z]$/` before interpolation into PowerShell command. UNC paths correctly fail validation and bail with warning. Injection impossible with current validation.
-**Revisit when**: Drive letter validation is relaxed.
+### R6-001: CI heartbeat interval leak (P2)
+**File**: `src/orchestrator.js:315-324`
+**Rationale**: `_runPhaseWithRetry` catches all errors internally and returns false, so the `clearInterval` at line 324 is always reached. The `.unref()` on the interval also ensures process exit is not blocked.
+**Revisit when**: `_runPhaseWithRetry` is refactored to allow exceptions to propagate.
 
-### A3-002: FileTools.writeFile Not Atomic (P3)
-**File**: `src/file-tools.js:41-44`
-**Rationale**: Uses bare `writeFileSync` without write-to-temp-then-rename. Mitigated by backup system (originals preserved before any write) and transformer's restore-on-retry.
-**Revisit when**: Users report file corruption after crashes during transform phase.
+### R6-002: applyAutoFixes path not validated (P2)
+**File**: `src/conformity-checker.js:478-498`
+**Rationale**: All `issue.file` values come from hardcoded arrays in `shouldNotExist` checks, not from external input.
+**Revisit when**: External input flows into conformity issue file paths.
 
-### A3-004: Rate Limiter Singleton Not Resettable (P3)
-**File**: `src/agents/base-agent.js:61-82`
-**Rationale**: Module-level singleton with mutable state persists across test runs. Tests pass (249/249). In production, single process lifetime makes this correct.
-**Revisit when**: Test flakiness appears related to rate limiter delays.
+### R6-005: Missing await on logger call (P3)
+**File**: `src/agents/validator-agent.js:168`
+**Rationale**: Logger buffers writes and has synchronous flush on exit. Impact limited to crash scenarios. Re-confirmed from prior P3-NF3.
+**Revisit when**: Log entries are missing in crash scenarios.
 
-### A3-005: Analyzer Direct readFileSync (P3)
-**File**: `src/agents/analyzer-agent.js:121-126`
-**Rationale**: `_verifyInstalledVersion` reads `composer.lock` via direct `readFileSync` with hardcoded path. No user/LLM input in path. Inconsistent with FileTools pattern but no security gap.
-**Revisit when**: Analyzer processes LLM-suggested file paths.
+### R6-006: Dead code in isDefaultMiddlewareStub (P3)
+**File**: `src/transforms/l11-structural.js:300-308`
+**Rationale**: The loop with empty if-block adds confusion but doesn't affect correctness. Conservative checks at lines 313-316 handle the important cases.
+**Revisit when**: The function is refactored.
 
-### A3-006: Composer Arg Validation with Spaces on Windows (P3)
-**File**: `src/agents/dependency-agent.js:70-75`
-**Rationale**: SAFE_ARG_RE allows spaces in args with `shell:true` on Windows. All dangerous metacharacters blocked. execa v9 quotes array args.
-**Revisit when**: execa changes quoting behavior or SAFE_ARG_RE is widened.
+### R6-007: PowerShell interpolation in _checkDiskSpace (P2)
+**File**: `src/orchestrator.js:699-706`
+**Rationale**: `driveLetter` is validated to single A-Z letter via `/^[A-Z]$/` regex. No injection possible.
+**Revisit when**: Drive letter sourcing changes.
 
-### A3-007: PHP Syntax Check shell:false vs Artisan shell:true (P3)
-**File**: `src/agents/validator-agent.js:115-146`
-**Rationale**: Intentional inconsistency. `php -l` uses `shell:false` for safety (paths from glob could contain special chars). Artisan uses `shell:true` for Windows .bat wrapper support.
-**Revisit when**: Never -- correct trade-off.
+### R6-008: style-formatter useProcessEnv (P2)
+**File**: `src/style-formatter.js:177`
+**Rationale**: Style formatters need PATH and PHP env vars. Local tooling, low risk. Re-confirmed from prior SEC-012.
+**Revisit when**: Centralised shell execution with tool-specific env is implemented.
 
-### SEC-032: TOCTOU in file_exists Check (P3)
-**File**: `src/file-tools.js:63-70, 145-147`
-**Rationale**: Race window between existsSync and operation. Single-user CLI with lock file. Node.js fs throws on actual conflicts.
-**Revisit when**: Tool runs in multi-user or concurrent environments.
+### R6-009: rules-arrays regex may match non-validation strings (P3)
+**File**: `src/transforms/rules-arrays.js:25-30`
+**Rationale**: Glob pattern `app/**/*.php` limits scope. Pipe-delimited strings outside validation are rare in app code.
+**Revisit when**: Users report false positives.
 
-### SEC-033: tool_use_id Accepted Without Validation (P3)
-**File**: `src/agents/base-agent.js:330-336`
-**Rationale**: `block.id` from API response echoed back as `tool_use_id`. Generated by Anthropic API, not LLM. No security impact from incorrect ID.
-**Revisit when**: Never -- API contract.
+### R6-010: composer.json parse error message misleading (P3)
+**File**: `src/orchestrator.js:480-486`
+**Rationale**: The original error message IS included in the wrapper, so debugging is possible. Just slightly misleading wrapper text.
+**Revisit when**: Users report confusion from the error message.
 
-### SEC-036: Sensitive File Blocklist Basename Matching (P3)
-**File**: `src/file-tools.js:286-299`
-**Rationale**: Some patterns could false-positive on paths containing sensitive-looking substrings. False positives are safe (block, not allow).
-**Revisit when**: Users report false positives blocking legitimate file access.
+### SEC-101: Indirect prompt injection chain (P3)
+**File**: `src/agents/transformer-agent.js:301-326`
+**Rationale**: Mitigated by FileTools write guards, sensitive file blocking, content boundary randomization, and multi-agent architecture. Inherent to any LLM-in-the-loop system.
+**Revisit when**: Agents gain capabilities beyond file read/write (e.g., network access).
 
-### SEC-037: No Content Validation on LLM File Writes (P3)
-**File**: `src/file-tools.js:318-377`
-**Rationale**: write_file validates paths but not content. LLM could write PHP with backdoors. This is inherent to LLM code transformation tools -- content validation requires full PHP static analysis. Users review via SHIFT_REPORT.md and git diff on dedicated branch.
-**Revisit when**: Never -- fundamental design boundary.
+### SEC-102: Composer env leak via malicious scripts (P2)
+**File**: `src/agents/dependency-agent.js:76-84`
+**Rationale**: Requires deliberately malicious target project. Mitigated by subcommand allowlist and the fact that Composer itself doesn't exfiltrate env.
+**Revisit when**: Tool is used on untrusted third-party projects.
+
+### SEC-103: State validation doesn't check field types (P3)
+**File**: `src/state-manager.js:192-217`
+**Rationale**: `.shift/` directory is gitignored and local. Attack requires local file access. SAFE_ARG_RE provides defense-in-depth.
+**Revisit when**: State file is shared across systems (e.g., CI artifacts).
+
+### SEC-104: Build script uses execSync with interpolation (P3)
+**File**: `scripts/build-reference-diffs.js:46`
+**Rationale**: Build scripts are developer-only, not run during upgrades. All inputs are hardcoded.
+**Revisit when**: Build scripts accept user input.
+
+### SEC-105: postTransformChecks reads files without size limit (P2)
+**File**: `src/orchestrator.js:48-139`
+**Rationale**: Only affects local upgrade tool process. No remote impact. Would only be triggered by a deliberately oversized file in the target project.
+**Revisit when**: FileTools read limits are standardized across all file reading paths.
+
+### SEC-106: Regex patterns with potential backtracking (P3)
+**Files**: `src/transforms/l11-structural.js`, `src/blueprint-exporter.js`
+**Rationale**: Run on local project files with process-level timeouts. Cannot cause security compromise.
+**Revisit when**: Processing untrusted uploaded files.
+
+### SEC-107: ParseError stores rawPreview (P3)
+**File**: `src/errors.js:24-28`
+**Rationale**: Sensitive file filter is comprehensive (covers `.env*`, `.key`, credentials). Only exploitable with unusual naming conventions.
+**Revisit when**: New sensitive file patterns are identified.
 
 ---
 
 ## 7. Prior Audit Comparison
 
-### Prior Fixes Verification (18/18 intact)
+### Prior Fixes Verification (Run #3: 4/4 intact)
 
 | Prior Finding | Prior Status | Current Status | Notes |
 |---|---|---|---|
-| P1-003: readJson unwrapped JSON.parse | Fixed | Still fixed | file-tools.js:34 |
-| P1-005: _callWithRetry maxRetries=0 | Fixed | Still fixed | base-agent.js:346 |
-| P2-001: showStatus missing try/catch | Fixed | Still fixed | bin/shift.js:96 |
-| P2-003: _ensureGitignore swallows errors | Fixed | Still fixed | orchestrator.js:412 |
-| P2-004/005/006/007/008: _requireState guards | Fixed | Still fixed | state-manager.js |
-| P2-009: _flushBuffer re-entrancy guard | Fixed | Still fixed | logger.js:57 |
-| P2-018: transformer direct state access | Fixed | Still fixed | transformer-agent.js:239 |
-| P2-022: _requireState 5 methods | Fixed | Still fixed | state-manager.js |
-| A2-006: code fence injection | Fixed | Still fixed | reporter-agent.js:150 |
-| SEC-007: write_file extension blocklist | Fixed | Still fixed | file-tools.js:355 |
-| SEC-009: API key log scrubbing | Fixed | Still fixed | logger.js:79 |
-| SEC-010: shell:false PHP syntax check | Fixed | Still fixed | validator-agent.js:115 |
-| SEC-016: Error message truncation | Fixed | Still fixed | validator-agent.js:173 |
-| SEC-018: Prompt injection defense | Fixed | Still fixed | validator-agent.js |
+| A3-003: Dead code (SAFE_ARG_RE) in git-manager | Fixed (Run #3) | Still fixed | git-manager.js |
+| SEC-034: process.env spread leaks API key | Fixed (Run #3) | Still fixed | validator-agent.js ENV_ALLOWLIST |
+| A2-010: node: prefix for builtins | Fixed (Run #3) | Still fixed | All source files |
+| A2-011: _callWithRetry timeout not unref'd | Fixed (Run #3) | Still fixed | base-agent.js .unref() |
 
-### Prior Observations Resolved This Run
+### Prior Fixes Verification (Run #4: 7/7 intact)
 
 | Prior Finding | Prior Status | Current Status | Notes |
 |---|---|---|---|
-| A2-010: node: prefix not used | Observation | **Fixed** | All 9 source files migrated |
-| A2-011: _callWithRetry timeout not unref'd | Observation | **Fixed** | .unref() added to both timers |
-| SEC-024: process.env spread to PHP | Observation | **Fixed** | ENV_ALLOWLIST filter implemented |
+| P1-001: _phpSyntaxCheck never collects errors | Fixed (Run #4) | Still fixed | validator-agent.js |
+| P1-002: _contentFilterFallback wrong argument types | Fixed (Run #4) | Still fixed | transformer-agent.js |
+| P2-001: useProcessEnv leaks API key in php -l | Fixed (Run #4) | Still fixed | validator-agent.js |
+| P2-005: /g flag on regex .test() causes false negatives | Fixed (Run #4) | Still fixed | class-strings.js |
+| P2-008: readFileSync without try-catch in l11-structural | Fixed (Run #4) | Still fixed | l11-structural.js |
+| SEC-002: pre-processor bypasses FileTools | Fixed (Run #4) | Still fixed | pre-processor.js |
+| SEC-003: l11-structural bypasses FileTools | Fixed (Run #4) | Still fixed | l11-structural.js |
 
-### Prior Observations Still Valid
+### Prior Fixes Verification (Run #5: 1/1 intact)
+
+| Prior Finding | Prior Status | Current Status | Notes |
+|---|---|---|---|
+| P2-NF2: join('..') instead of dirname() in blueprint-exporter | Fixed (Run #5) | Still fixed | blueprint-exporter.js |
+
+### Prior Observations Re-evaluated
+
+All prior observations from Runs #3-#5 were re-evaluated against the current codebase:
 
 | Prior Finding | Prior Status | Current Status | Notes |
 |---|---|---|---|
@@ -222,67 +245,84 @@ The codebase has been through 3 full audit cycles with zero regressions across a
 | A2-004: GitManager result-object | Observation | Still valid | Intentional design |
 | A2-005: StateManager plain Error | Observation | Still valid | Same as A2-003 |
 | A2-007: save() busy-wait | Observation | Still valid | Required for SIGINT |
-| A2-012 / SEC-026: PowerShell interpolation | Observation | Still valid | Drive letter validated |
+| A2-012 / SEC-026: PowerShell interpolation | Observation | Superseded by R6-007 | Same finding, new ID |
 | SEC-021: TOCTOU in _abs() | Observation | Still valid | Requires local attacker |
 | SEC-023: Composer ^ + shell:true | Observation | Still valid | execa quotes args |
 | SEC-027: Backup path no symlink | Observation | Still valid | Requires .shift/ write access |
+| P2-NF1: blueprint-exporter outputPath not validated | Observation | Still valid | No external input flows to path |
+| P2-NF3: blueprint-exporter writeFileSync not atomic | Observation | Still valid | Blueprint is regenerable |
+| P2-NF4: dependency-agent useProcessEnv:true | Observation | Superseded by SEC-102 | Same finding, deeper analysis |
+| P3-NF1/NF2: conformity-checker readFileSync no try-catch | Observation | Still valid | Advisory module |
+| P3-NF3: Missing await on logger call | Observation | Superseded by R6-005 | Same finding, new ID |
+| P3-NF4: debug-calls regex matches inside strings | Observation | Still valid | Anchored to line start |
+| P3-NF5: anonymous-migrations first class only | Observation | Still valid | Convention: one class per file |
+| SEC-011: Git useProcessEnv | Observation | Still valid | Git needs SSH keys |
+| SEC-012: Composer/style useProcessEnv | Observation | Superseded by SEC-102 / R6-008 | Same findings, new IDs |
+| SEC-013: State set() arbitrary keys | Observation | Superseded by SEC-103 | Same finding, deeper analysis |
+| SEC-014: postTransformChecks bypass FileTools | Observation | Still valid + extended by SEC-105 | Size limit gap also noted |
 
-**New findings this audit**: 14
 **Prior fixes that regressed**: 0
-**Prior observations resolved**: 3 (A2-010, A2-011, SEC-024)
-**Prior observations still valid**: 10
+**Prior observations resolved this run**: 0
+**Prior observations superseded by new IDs**: 5
+
+### Cumulative Audit History
+
+| Run | Date | Source Files | Findings | Fixed | Tests Added | Final Tests |
+|---|---|---|---|---|---|---|
+| Run #1 | -- | 9 | ~20 | ~14 | -- | -- |
+| Run #2 | -- | 9 | ~24 | ~8 | -- | 221 |
+| Run #3 | 2026-03-28 | 17 | 14 | 4 | 28 | 249 |
+| Run #4 | 2026-03-29 | 37 | 19 | 7 | 15 | 608 |
+| Run #5 | 2026-03-30 | 38 | 13 | 1 | 6 | 614 |
+| Run #6 | 2026-03-30 | 42 | 17 | 2 | 7 | 621 |
 
 ---
 
 ## 8. Architecture Recommendations (Future -- Out of Scope)
 
-- [ ] **Centralize shell execution**: Unify git/composer/php/artisan exec into a single `shell.js` utility with shared arg validation, timeout, and platform handling. Medium effort.
-- [ ] **Typed error classes across codebase**: Replace plain `Error` in FileTools, StateManager, and GitManager with domain-specific error classes with `code` properties. Medium effort.
-- [x] ~~**Minimal env for PHP subprocesses**~~: Implemented this run (SEC-034 fix).
-- [x] ~~**Unref API timeout timers**~~: Implemented this run (A2-011 fix).
-- [x] ~~**Adopt node: prefix for builtins**~~: Implemented this run (A2-010 fix).
-- [ ] **Integration test infrastructure**: Docker-based test harness with PHP/Composer for end-to-end pipeline testing. High effort.
-- [ ] **Per-agent token cost tracking**: Add per-agent token breakdown to shift report and state file for cost visibility. Medium effort.
-
----
-
-## 9. Known Risk Areas Update
-
-| Risk Area | Found Again? | Status | Watch List? |
-|---|---|---|---|
-| Shell injection | No new exploitable paths | All mitigated | Yes -- monitor shell:true usage |
-| Path traversal | No new exploitable paths | Well-defended by _abs() | Yes -- monitor new file operations |
-| State corruption | No new issues | Atomic save + recovery | No -- resolved |
-| API key exposure | SEC-024 **fixed** | ENV_ALLOWLIST implemented | No -- resolved |
-| LLM output trust | No new issues | Code fence escape + path guards | Yes -- monitor new LLM output paths |
-| Windows compatibility | No new issues | Shell:true mitigated | Yes -- monitor execa version changes |
-| Process hang on exit | A2-011 **fixed** | Timers unref'd | No -- resolved |
+- [ ] **Centralize shell execution env handling**: Use `envKeys` allowlist consistently across all `execCommand` calls (composer, style-formatter, git). Would resolve SEC-102, R6-008, SEC-011, and prior SEC-012 observations. Medium effort.
+- [ ] **Enforce --no-scripts on composer update/install**: Add `--no-scripts` to the `run_composer` handler at the code level, not relying on LLM instructions. Would close the SEC-102 API key exfiltration vector. Low effort.
+- [ ] **Add file size guard to postTransformChecks**: Check file size before `readFileSync` calls, consistent with FileTools' 1MB limit. Would close SEC-105. Low effort.
+- [ ] **Typed error classes across codebase**: Replace plain `Error` in FileTools, StateManager, and GitManager with domain-specific error classes. Medium effort.
+- [ ] **Route FileTools through all transforms**: Standardize conformity-checker auto-fix and post-transform cleanup on FileTools. Would eliminate SEC-014. Low effort.
+- [ ] **Wrap conformity-checker readFileSync in try-catch**: Six unguarded readFileSync calls should be wrapped for robustness. Low effort.
+- [ ] **Add boundary markers around plan-derived instructions**: Wrap planner output in explicit boundary tags in transformer prompt, similar to file content boundaries. Would mitigate SEC-101. Low effort.
+- [ ] **Extend state validation to check field types**: Validate `branchName`, `fromVersion`, `toVersion` types in `validateState()`. Low effort.
+- [ ] **Bounded module-level caches**: Add LRU eviction for large codebase support. Low effort.
+- [x] ~~**Minimal env for PHP subprocesses**~~: Implemented Run #3 (SEC-034), extended Run #4 (P2-001).
+- [x] ~~**Unref API timeout timers**~~: Implemented Run #3 (A2-011).
+- [x] ~~**Adopt node: prefix for builtins**~~: Implemented Run #3 (A2-010).
+- [x] ~~**Replace join('..') with dirname()**~~: Implemented Run #5 (P2-NF2).
+- [x] ~~**Check execCommand result instead of dead try/catch**~~: Implemented Run #6 (R6-003).
+- [x] ~~**Fix PHP 13 version constraint inconsistency**~~: Implemented Run #6 (R6-004).
+- [ ] **Integration test infrastructure**: Docker-based test harness with PHP/Composer. High effort.
+- [ ] **Per-agent token cost tracking**: Per-agent token breakdown in shift report. Medium effort.
 
 ---
 
 *Report generated by Enterprise Code Audit Pipeline -- Agent 7 (Reporter)*
 *Pipeline: Discovery > Audit > Security > Fix > Review > Test > Report*
-*Prior audits: 58 findings total, 22 fixed, 0 regressions*
-*This audit: 14 findings, 4 fixed, 28 new tests*
-*Final test run: 249 passing, 0 failing*
+*Prior audits: Run #1-#5 -- 86+ findings total, 34 fixed, 0 regressions across all runs*
+*This audit (Run #6): 17 findings, 2 fixed, 7 new tests*
+*Final test run: 621 passing, 0 failing*
 
 ```
-═══════════════════════════════════════════════════
+===============================================
 AGENT 7 -- REPORTER -- STATUS: COMPLETE
-Report sections: 9 / 9 complete
-═══════════════════════════════════════════════════
+Report sections: 8 / 8 complete
+===============================================
 
 FULL PIPELINE STATUS
-═══════════════════════════════════════════════════
-Agent 1 -- Discovery:   COMPLETE (17 files, 2,548 lines)
-Agent 2 -- Audit:       COMPLETE (7 P3 findings, 0 fix required)
-Agent 3 -- Security:    COMPLETE (7 P3 findings, 0 fix required)
-Agent 4 -- Fix:         COMPLETE (4 hardening fixes applied)
-Agent 5 -- Review:      COMPLETE (4/4 verified, 0 amended)
-Agent 6 -- Test:        COMPLETE (28 new tests)
+===============================================
+Agent 1 -- Discovery:   COMPLETE (42 files, 20 test files)
+Agent 2 -- Audit:       COMPLETE (10 findings: 2 fix-required, 8 observations)
+Agent 3 -- Security:    COMPLETE (7 findings: all observations)
+Agent 4 -- Fix:         COMPLETE (2/2 fixes applied)
+Agent 5 -- Review:      COMPLETE (2/2 verified, 0 amended)
+Agent 6 -- Test:        COMPLETE (7 new tests)
 Agent 7 -- Reporter:    COMPLETE
 
-Tests: 249 passing (baseline was 221, +28 new)
+Tests: 621 passing (baseline was 614, +7 new)
 Pipeline: CLEAN RUN -- all agents completed successfully
-═══════════════════════════════════════════════════
+===============================================
 ```
