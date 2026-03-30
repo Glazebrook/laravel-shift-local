@@ -259,4 +259,10 @@ describe('createApiClient', () => {
     const api = createApiClient({ provider: 'bedrock', bedrock: { region: 'us-east-1', globalInference: true } });
     assert.equal(api.mapModel('claude-opus-4-6'), 'global.anthropic.claude-opus-4-6-v1');
   });
+
+  it('sets AWS_PROFILE from bedrock.profile config', () => {
+    delete process.env.AWS_PROFILE;
+    createApiClient({ provider: 'bedrock', bedrock: { region: 'eu-west-2', profile: 'datalake' } });
+    assert.equal(process.env.AWS_PROFILE, 'datalake');
+  });
 });

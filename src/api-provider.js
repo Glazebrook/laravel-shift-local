@@ -105,6 +105,7 @@ export function calculateCost(provider, modelString, inputTokens, outputTokens) 
  * @param {string} [config.provider] - 'anthropic' or 'bedrock' (auto-detected if omitted)
  * @param {object} [config.bedrock] - Bedrock-specific options
  * @param {string} [config.bedrock.region] - AWS region (default: 'us-east-1')
+ * @param {string} [config.bedrock.profile] - AWS profile name from ~/.aws/credentials (sets AWS_PROFILE)
  * @param {boolean} [config.bedrock.globalInference] - Use cross-region inference (default: false)
  * @returns {{ client: object, mapModel: Function, provider: string, getPricing: Function }}
  */
@@ -117,6 +118,10 @@ export function createApiClient(config = {}) {
 
   let client;
   if (provider === 'bedrock') {
+    // Set AWS_PROFILE so the SDK credential chain picks up the right account
+    if (bedrockOpts.profile) {
+      process.env.AWS_PROFILE = bedrockOpts.profile;
+    }
     const opts = {};
     if (bedrockOpts.region) opts.awsRegion = bedrockOpts.region;
     client = new AnthropicBedrock(opts);

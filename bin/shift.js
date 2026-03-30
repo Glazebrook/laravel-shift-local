@@ -362,6 +362,7 @@ function loadConfig(projectPath, cliOpts = {}) {
         if (rc.bedrock && typeof rc.bedrock === 'object') {
           config.bedrock = {};
           if (typeof rc.bedrock.region === 'string') config.bedrock.region = rc.bedrock.region;
+          if (typeof rc.bedrock.profile === 'string') config.bedrock.profile = rc.bedrock.profile;
           if (typeof rc.bedrock.globalInference === 'boolean') config.bedrock.globalInference = rc.bedrock.globalInference;
         }
         // Merge git settings
