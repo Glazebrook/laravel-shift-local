@@ -1,6 +1,12 @@
 {
   "_comment": "Laravel Shift Local configuration file. Place in project root. All keys are optional.",
 
+  "provider": "bedrock",
+  "bedrock": {
+    "region": "eu-west-2",
+    "profile": "datalake"
+  },
+
   "shift": {
     "_comment": "Default --from/--to versions. CLI flags override these.",
     "fromVersion": null,

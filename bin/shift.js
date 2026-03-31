@@ -288,6 +288,50 @@ function validateConfig(config) {
     config.exclude.filePatterns = config.exclude.filePatterns.filter(p => typeof p === 'string' && p.length > 0);
   }
 
+  // Pre-processing config: validate structure
+  if (config.preProcessing) {
+    if (typeof config.preProcessing !== 'object' || Array.isArray(config.preProcessing)) {
+      console.warn('Warning: preProcessing must be an object, ignoring');
+      delete config.preProcessing;
+    } else {
+      if (config.preProcessing.enabled !== undefined && typeof config.preProcessing.enabled !== 'boolean') {
+        console.warn('Warning: preProcessing.enabled must be a boolean, ignoring');
+        delete config.preProcessing.enabled;
+      }
+      if (config.preProcessing.transforms !== undefined) {
+        if (typeof config.preProcessing.transforms !== 'object' || Array.isArray(config.preProcessing.transforms)) {
+          console.warn('Warning: preProcessing.transforms must be an object of { name: boolean }, ignoring');
+          delete config.preProcessing.transforms;
+        } else {
+          // Strip any non-boolean values
+          for (const [key, val] of Object.entries(config.preProcessing.transforms)) {
+            if (typeof val !== 'boolean') {
+              console.warn(`Warning: preProcessing.transforms.${key} must be a boolean, ignoring`);
+              delete config.preProcessing.transforms[key];
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Code style config: validate structure
+  if (config.codeStyle) {
+    if (typeof config.codeStyle !== 'object' || Array.isArray(config.codeStyle)) {
+      console.warn('Warning: codeStyle must be an object, ignoring');
+      delete config.codeStyle;
+    } else {
+      if (config.codeStyle.enabled !== undefined && typeof config.codeStyle.enabled !== 'boolean') {
+        console.warn('Warning: codeStyle.enabled must be a boolean, ignoring');
+        delete config.codeStyle.enabled;
+      }
+      if (config.codeStyle.formatter !== undefined && typeof config.codeStyle.formatter !== 'string') {
+        console.warn('Warning: codeStyle.formatter must be a string, ignoring');
+        delete config.codeStyle.formatter;
+      }
+    }
+  }
+
   return config;
 }
 
@@ -375,6 +419,31 @@ function loadConfig(projectPath, cliOpts = {}) {
         if (rc.shift) {
           if (rc.shift.fromVersion) config.shift.fromVersion = String(rc.shift.fromVersion);
           if (rc.shift.toVersion) config.shift.toVersion = String(rc.shift.toVersion);
+        }
+        // Merge pre-processing config (deterministic transforms)
+        if (rc.preProcessing && typeof rc.preProcessing === 'object') {
+          config.preProcessing = {};
+          if (typeof rc.preProcessing.enabled === 'boolean') {
+            config.preProcessing.enabled = rc.preProcessing.enabled;
+          }
+          if (rc.preProcessing.transforms && typeof rc.preProcessing.transforms === 'object') {
+            const safeTransforms = {};
+            for (const [key, value] of Object.entries(rc.preProcessing.transforms)) {
+              if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+              if (typeof value === 'boolean') safeTransforms[key] = value;
+            }
+            config.preProcessing.transforms = safeTransforms;
+          }
+        }
+        // Merge code style config (post-processing formatter)
+        if (rc.codeStyle && typeof rc.codeStyle === 'object') {
+          config.codeStyle = {};
+          if (typeof rc.codeStyle.enabled === 'boolean') {
+            config.codeStyle.enabled = rc.codeStyle.enabled;
+          }
+          if (typeof rc.codeStyle.formatter === 'string' && rc.codeStyle.formatter.trim()) {
+            config.codeStyle.formatter = rc.codeStyle.formatter.trim();
+          }
         }
       }
     } catch (err) {
@@ -787,23 +856,27 @@ async function rollbackUpgrade(opts) {
   const logger = new Logger(projectPath, false);
   const git = new GitManager(projectPath, logger);
 
-  console.log(`Rolling back to backup tag: ${tag}`);
-  const result = await git.rollbackToTag(tag, s.branchName);
-  if (!result.ok) {
-    throw new ShiftCliError('SHIFT_ERR_ROLLBACK_FAILED', `Git rollback failed: ${result.stderr}`);
-  }
+  try {
+    console.log(`Rolling back to backup tag: ${tag}`);
+    const result = await git.rollbackToTag(tag, s.branchName);
+    if (!result.ok) {
+      throw new ShiftCliError('SHIFT_ERR_ROLLBACK_FAILED', `Git rollback failed: ${result.stderr}`);
+    }
 
-  // H3 FIX: Verify the rollback actually landed on the expected commit
-  // before deleting state. A partial rollback (checkout ok, reset --hard fails)
-  // would leave code in an indeterminate state — keep state so user can investigate.
-  const verifyResult = await git.run(['rev-parse', 'HEAD']);
-  const tagResult = await git.run(['rev-parse', tag]);
-  if (!verifyResult.ok || !tagResult.ok || verifyResult.stdout.trim() !== tagResult.stdout.trim()) {
-    console.warn('WARNING: Rollback may not be complete — HEAD does not match backup tag.');
-    console.warn('State files preserved for investigation. Run "shift reset" to clear manually.');
-    return;
-  }
+    // H3 FIX: Verify the rollback actually landed on the expected commit
+    // before deleting state. A partial rollback (checkout ok, reset --hard fails)
+    // would leave code in an indeterminate state — keep state so user can investigate.
+    const verifyResult = await git.run(['rev-parse', 'HEAD']);
+    const tagResult = await git.run(['rev-parse', tag]);
+    if (!verifyResult.ok || !tagResult.ok || verifyResult.stdout.trim() !== tagResult.stdout.trim()) {
+      console.warn('WARNING: Rollback may not be complete — HEAD does not match backup tag.');
+      console.warn('State files preserved for investigation. Run "shift reset" to clear manually.');
+      return;
+    }
 
-  stateManager.delete();
-  console.log('Rollback complete. State cleared.');
+    stateManager.delete();
+    console.log('Rollback complete. State cleared.');
+  } finally {
+    logger.destroy();
+  }
 }
