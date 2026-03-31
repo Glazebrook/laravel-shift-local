@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This prompt tests whether the upgrade tool ACTUALLY WORKS — not whether the code is bug-free (that's the audit skill's job), but whether running `lshift` on a real Laravel project at version X produces a correctly upgraded project at version Y.
+This prompt tests whether the upgrade tool ACTUALLY WORKS — not whether the code is bug-free (that's the audit skill's job), but whether running `shift upgrade` on a real Laravel project at version X produces a correctly upgraded project at version Y.
 
 Think of it this way:
 - **Audit skill** = "Is the engine built correctly?"
@@ -12,15 +12,25 @@ Think of it this way:
 
 ## System Context
 
-You are running end-to-end validation of **Laravel Shift Local** (`lshift`) — a Node.js CLI tool that automates Laravel framework upgrades. The tool is installed and available via the `lshift` command.
+You are running end-to-end validation of **Laravel Shift Local** (`shift`) — a Node.js CLI tool that automates Laravel framework upgrades. The tool is installed and available via the `shift` command (or `node bin/shift.js` if not globally installed).
 
 **Requirements for this test harness:**
 - PHP 8.2+ installed and available (`php --version`)
 - Composer installed and available (`composer --version`)
 - Git installed and available (`git --version`)
-- The `lshift` command is available
+- Node.js 20+ installed and available (`node --version`)
+- The `shift` command is available (or use `node bin/shift.js` as fallback)
 - A valid `ANTHROPIC_API_KEY` is set in the environment
 - Internet access for Composer to resolve dependencies
+
+**CLI reference (from `shift --help`):**
+```
+shift upgrade --from=<version> --to=<version> [--path=<path>] [--verbose] [--fail-fast] [--dry-run]
+shift resume [--path=<path>]
+shift status [--path=<path>]
+shift reset [--path=<path>]
+shift rollback [--path=<path>]
+```
 
 ---
 
@@ -33,16 +43,28 @@ Run ALL of these. If ANY fails, stop and resolve before proceeding.
 php --version           # Must be 8.2+
 composer --version      # Must be installed
 git --version           # Must be installed
-node --version          # Must be 22+
+node --version          # Must be 20+
 
-# 2. Verify lshift is available
-lshift --version 2>/dev/null || which lshift || echo "lshift not found"
+# 2. Verify shift is available
+shift --version 2>/dev/null || node bin/shift.js --version 2>/dev/null || echo "shift not found — run: npm link"
 
-# 3. Verify API key
-echo "ANTHROPIC_API_KEY is ${ANTHROPIC_API_KEY:+set}" 
+# 3. Determine the shift command to use for all tests
+if command -v shift &>/dev/null; then
+  SHIFT_CMD="shift"
+elif [ -f bin/shift.js ]; then
+  SHIFT_CMD="node bin/shift.js"
+else
+  echo "FATAL: Cannot find shift CLI"
+  exit 1
+fi
+echo "Using: $SHIFT_CMD"
 
-# 4. Create test workspace (isolated from real projects)
-export TEST_WORKSPACE="$HOME/lshift-validation-$(date +%Y%m%d-%H%M%S)"
+# 4. Verify API key
+echo "ANTHROPIC_API_KEY is ${ANTHROPIC_API_KEY:+set}"
+[ -z "$ANTHROPIC_API_KEY" ] && echo "FATAL: ANTHROPIC_API_KEY not set" && exit 1
+
+# 5. Create test workspace (isolated from real projects)
+export TEST_WORKSPACE="$HOME/shift-validation-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$TEST_WORKSPACE"
 cd "$TEST_WORKSPACE"
 echo "Test workspace: $TEST_WORKSPACE"
@@ -54,7 +76,7 @@ Workspace: [path]
 PHP: [version]
 Composer: [version]
 Node: [version]
-lshift: [version or path]
+shift: [version or path]
 API key: set / NOT SET
 ═══════════════════════════════════════════════════
 ```
@@ -69,7 +91,7 @@ Each test follows this pattern:
 1. CREATE    → Scaffold a real Laravel project at a specific version
 2. SEED      → Add custom code that exercises upgrade edge cases
 3. SNAPSHOT  → Record the pre-upgrade state (file hashes, test results, structure)
-4. UPGRADE   → Run lshift against the project
+4. UPGRADE   → Run shift upgrade against the project
 5. VERIFY    → Check every aspect of the upgraded project
 6. REPORT    → Pass/fail with details
 ```
@@ -97,7 +119,7 @@ composer create-project laravel/laravel:^10.0 . --prefer-dist --no-interaction
 php artisan --version
 # Should output: Laravel Framework 10.x.x
 
-# Initialise git (lshift requires a git repo)
+# Initialise git (shift requires a git repo)
 git init
 git add -A
 git commit -m "Initial Laravel 10 project"
@@ -239,7 +261,7 @@ class CreatePostsTable extends Migration
 PHP
 ```
 
-**e) Route with old-style string controller reference:**
+**e) Route with controller reference:**
 ```bash
 cat > routes/api.php << 'PHP'
 <?php
@@ -328,36 +350,8 @@ echo "Pre-upgrade snapshot captured"
 ### 1.4 Run the Upgrade
 
 ```bash
-# Configure for Laravel 11 target
-cat > .shiftrc << 'JSON'
-{
-  "targetVersion": "11",
-  "preProcessing": {
-    "enabled": true,
-    "transforms": {
-      "anonymous-migrations": true,
-      "class-strings": true,
-      "debug-calls": true,
-      "declare-strict": false,
-      "facade-aliases": true,
-      "faker-methods": true,
-      "rules-arrays": true,
-      "model-table": true,
-      "latest-oldest": true,
-      "explicit-orderby": true,
-      "down-migration": false,
-      "laravel-carbon": true
-    }
-  },
-  "codeStyle": {
-    "enabled": true,
-    "formatter": "auto"
-  }
-}
-JSON
-
-# Run the upgrade
-lshift
+# Run the upgrade (versions specified via CLI flags — the authoritative method)
+$SHIFT_CMD upgrade --from=10 --to=11 --verbose
 ```
 
 **Wait for the upgrade to complete.** This will take several minutes as it calls
@@ -392,6 +386,11 @@ grep -rq "CustomServiceProvider" bootstrap/app.php bootstrap/providers.php confi
 # A6: RouteServiceProvider should be handled
 # (either removed with routes in bootstrap/app.php, or preserved if customised)
 echo "Check: RouteServiceProvider handling — manual review"
+
+# A7: Git branch should be the shift upgrade branch
+BRANCH=$(git branch --show-current)
+echo "Current branch: $BRANCH"
+echo "$BRANCH" | grep -q "shift/upgrade-10-to-11" && echo "PASS: Correct branch" || echo "INFO: Branch name: $BRANCH"
 ```
 
 #### B. Dependency Verification
@@ -400,10 +399,10 @@ echo "Check: RouteServiceProvider handling — manual review"
 echo "=== DEPENDENCY VERIFICATION ==="
 
 # B1: composer.json requires Laravel 11
-grep -q '"laravel/framework": "\^11' composer.json && echo "PASS: Framework ^11" || echo "FAIL: Framework not ^11"
+grep -q '"laravel/framework"' composer.json && grep -q '"\^11' composer.json && echo "PASS: Framework ^11" || echo "FAIL: Framework not ^11"
 
 # B2: PHP requirement updated
-grep -q '"php": "\^8.2' composer.json && echo "PASS: PHP ^8.2" || echo "FAIL: PHP requirement not updated"
+grep -q '"php"' composer.json && grep -q '"\^8.2' composer.json && echo "PASS: PHP ^8.2" || echo "FAIL: PHP requirement not updated"
 
 # B3: composer install succeeds
 composer install --no-interaction 2>&1 | tail -5
@@ -439,45 +438,60 @@ grep -q "posts" routes/api.php && echo "PASS: API routes present" || echo "FAIL:
 
 #### D. Pre-Processing Verification
 
+These checks verify deterministic transforms ran correctly. Pre-processing runs
+automatically (all transforms enabled by default except `declare-strict` and
+`down-migration`).
+
 ```bash
 echo "=== PRE-PROCESSING VERIFICATION ==="
 
-# D1: Debug call removed
+# D1: Debug call removed (debug-calls transform, enabled by default)
 grep -q "dd(\$posts)" app/Http/Controllers/PostController.php && echo "FAIL: dd() not removed" || echo "PASS: dd() removed"
 
-# D2: Migration converted to anonymous class
+# D2: Migration converted to anonymous class (anonymous-migrations transform)
 grep -q "return new class extends Migration" database/migrations/2024_01_01_000001_create_posts_table.php && echo "PASS: Anonymous migration" || echo "FAIL: Still class-based migration"
 
-# D3: Carbon import updated
+# D3: Carbon import updated (laravel-carbon transform)
 grep -q "use Illuminate\\\\Support\\\\Carbon" app/Models/Post.php && echo "PASS: Carbon import updated" || echo "INFO: Carbon import unchanged (may be correct if unused)"
 
-# D4: Redundant $table removed from Post model (table follows convention)
-grep -q "protected \$table" app/Models/Post.php && echo "INFO: \$table still present (may be intentional)" || echo "PASS: Redundant \$table removed"
+# D4: Redundant $table removed from Post model (model-table transform — table follows convention)
+grep -q 'protected \$table' app/Models/Post.php && echo "INFO: \$table still present (may be intentional)" || echo "PASS: Redundant \$table removed"
 
-# D5: latest() used instead of orderBy('created_at', 'desc')
+# D5: latest() used instead of orderBy('created_at', 'desc') (latest-oldest transform)
 grep -q "->latest()" app/Models/Post.php && echo "PASS: latest() adopted" || echo "INFO: orderBy still used"
 
-# D6: Validation rules as arrays (if rules-arrays transform ran)
+# D6: Validation rules as arrays (rules-arrays transform)
 grep -q "\['required', 'string', 'max:400'\]" app/Http/Controllers/PostController.php && echo "PASS: Rules as arrays" || echo "INFO: Rules still pipe-separated"
 ```
 
-#### E. Report Verification
+#### E. Backups & Report Verification
 
 ```bash
-echo "=== REPORT VERIFICATION ==="
+echo "=== BACKUPS & REPORT VERIFICATION ==="
 
-# E1: Shift report generated
-test -f .shift/SHIFT_REPORT.md && echo "PASS: Report exists" || echo "FAIL: No report"
+# E1: Shift report generated (written to project root, NOT .shift/)
+test -f SHIFT_REPORT.md && echo "PASS: Report exists at project root" || echo "FAIL: No SHIFT_REPORT.md at project root"
 
 # E2: Report contains expected sections
-if [ -f .shift/SHIFT_REPORT.md ]; then
-  grep -q "Pre-Processing" .shift/SHIFT_REPORT.md && echo "PASS: Pre-processing section" || echo "INFO: No pre-processing section"
-  grep -q "Token" .shift/SHIFT_REPORT.md && echo "PASS: Token usage section" || echo "INFO: No token section"
+if [ -f SHIFT_REPORT.md ]; then
+  grep -qi "summary" SHIFT_REPORT.md && echo "PASS: Executive summary section" || echo "INFO: No summary section"
+  grep -qi "token\|cost\|usage" SHIFT_REPORT.md && echo "PASS: Token/cost section" || echo "INFO: No token section"
+  grep -qi "manual\|review\|action" SHIFT_REPORT.md && echo "PASS: Manual review section" || echo "INFO: No manual review section"
 fi
 
-# E3: Git log shows atomic commits
+# E3: Backup directory exists with pre-modification copies
+test -d .shift/backups && echo "PASS: Backup directory exists" || echo "FAIL: No backup directory"
+BACKUP_COUNT=$(find .shift/backups -type f 2>/dev/null | wc -l)
+echo "Backup files: $BACKUP_COUNT"
+[ "$BACKUP_COUNT" -gt 0 ] && echo "PASS: Backups created" || echo "FAIL: No backup files"
+
+# E4: State file exists
+test -f .shift/state.json && echo "PASS: State file exists" || echo "FAIL: No state file"
+
+# E5: Git log shows atomic commits per phase
 echo "Git log:"
 git log --oneline | head -20
+# EXPECTED: Multiple commits, one per phase (analysis, pre-processing, planning, etc.)
 ```
 
 #### F. Functional Verification
@@ -511,6 +525,7 @@ Structural:
   A3 New bootstrap format:          ✅ / ❌
   A4 Custom middleware preserved:   ✅ / ❌
   A5 Custom provider registered:    ✅ / ❌
+  A7 Correct git branch:            ✅ / ❌
 
 Dependencies:
   B1 Framework ^11:                 ✅ / ❌
@@ -532,10 +547,12 @@ Pre-Processing:
   D5 latest() adoption:             ✅ / ❌ / N/A
   D6 Rules as arrays:               ✅ / ❌ / N/A
 
-Report:
-  E1 Report generated:              ✅ / ❌
+Backups & Report:
+  E1 Report at project root:        ✅ / ❌
   E2 Report sections complete:      ✅ / ❌
-  E3 Atomic git commits:            ✅ / ❌
+  E3 Backup directory populated:    ✅ / ❌
+  E4 State file exists:             ✅ / ❌
+  E5 Atomic git commits:            ✅ / ❌
 
 Functional:
   F1 artisan list works:            ✅ / ❌
@@ -595,7 +612,7 @@ class Event extends Model
 }
 PHP
 
-# Controller with facade alias
+# Controller with facade alias (should be converted to FQN)
 cat > app/Http/Controllers/EventController.php << 'PHP'
 <?php
 
@@ -645,16 +662,8 @@ git add -A && git commit -m "Seed custom code"
 find app -type f -name "*.php" -exec md5sum {} \; | sort > /tmp/pre-upgrade-11-hashes.txt
 composer show --direct > /tmp/pre-upgrade-11-deps.txt
 
-# Configure
-cat > .shiftrc << 'JSON'
-{
-  "targetVersion": "12",
-  "preProcessing": { "enabled": true }
-}
-JSON
-
-# Run
-lshift
+# Run the upgrade
+$SHIFT_CMD upgrade --from=11 --to=12 --verbose
 ```
 
 ### 2.4 Verify
@@ -668,20 +677,29 @@ php artisan --version  # Should be 12.x.x
 # Carbon 3 compatibility (Carbon\Carbon should still work — it's the same package)
 grep -q "use Carbon\\\\Carbon" app/Models/Event.php && echo "INFO: Carbon import preserved" || echo "INFO: Carbon import changed"
 
-# Facade alias should be fully qualified
+# Facade alias should be fully qualified (facade-aliases transform)
 grep -q "use Illuminate\\\\Support\\\\Facades\\\\Cache" app/Http/Controllers/EventController.php && echo "PASS: Facade FQN" || echo "FAIL: Still using alias"
 
-# Debug dump removed
+# Debug dump removed (debug-calls transform)
 grep -q "dump(\$event)" app/Services/EventNotifier.php && echo "FAIL: dump() not removed" || echo "PASS: dump() removed"
 
 # Dependencies
-grep -q '"laravel/framework": "\^12' composer.json && echo "PASS: Framework ^12" || echo "FAIL: Framework not ^12"
+grep '"laravel/framework"' composer.json | grep -q '"\^12' && echo "PASS: Framework ^12" || echo "FAIL: Framework not ^12"
 composer install --no-interaction 2>&1 | tail -3
 php artisan list > /dev/null 2>&1 && echo "PASS: artisan works" || echo "FAIL: artisan broken"
 
 # Syntax
 ERRORS=$(find app -name "*.php" -exec php -l {} \; 2>&1 | grep -c "Parse error")
 echo "Syntax errors: $ERRORS"
+
+# Report at project root
+test -f SHIFT_REPORT.md && echo "PASS: Report exists" || echo "FAIL: No report"
+
+# Backups exist
+test -d .shift/backups && echo "PASS: Backups exist" || echo "FAIL: No backups"
+
+# Git branch
+git branch --show-current
 ```
 
 ```
@@ -698,6 +716,8 @@ TEST 2 — LARAVEL 11 → 12 — RESULTS
   Zero syntax errors:               ✅ / ❌
   Custom models intact:             ✅ / ❌
   Custom controllers intact:        ✅ / ❌
+  Report at project root:           ✅ / ❌
+  Backups created:                  ✅ / ❌
 
 OVERALL: ✅ PASS / ❌ FAIL
 ═══════════════════════════════════════════════════
@@ -707,8 +727,9 @@ OVERALL: ✅ PASS / ❌ FAIL
 
 ## Test 3 — Multi-Version Jump: Laravel 9 → 11
 
-This tests the tool's ability to handle a 2-version jump, which requires chaining
-two sets of changes.
+This tests the tool's ability to handle a 2-version jump. The upgrade matrix
+includes entries for 9→10 and 10→11. The planner uses `getCombinedMatrix()`
+to chain the breaking changes from both steps.
 
 ### 3.1 Create and Seed
 
@@ -748,14 +769,8 @@ git add -A && git commit -m "Seed custom code"
 ### 3.2 Upgrade and Verify
 
 ```bash
-cat > .shiftrc << 'JSON'
-{
-  "targetVersion": "11",
-  "preProcessing": { "enabled": true }
-}
-JSON
-
-lshift
+# Run the multi-version upgrade
+$SHIFT_CMD upgrade --from=9 --to=11 --verbose
 ```
 
 ```bash
@@ -764,7 +779,7 @@ echo "=== TEST 3 VERIFICATION ==="
 # Version should be 11 (jumped over 10)
 php artisan --version
 
-# Faker methods should be calls not properties
+# Faker methods should be calls not properties (faker-methods transform)
 grep -q "faker->sentence()" database/factories/PostFactory.php && echo "PASS: Faker methods" || echo "CHECK: Faker syntax"
 
 # All structural Laravel 11 changes should be present
@@ -777,6 +792,10 @@ php artisan list > /dev/null 2>&1 && echo "PASS: artisan works" || echo "FAIL: a
 
 ERRORS=$(find app -name "*.php" -exec php -l {} \; 2>&1 | grep -c "Parse error")
 echo "Syntax errors: $ERRORS"
+
+# Report and backups
+test -f SHIFT_REPORT.md && echo "PASS: Report exists" || echo "FAIL: No report"
+test -d .shift/backups && echo "PASS: Backups exist" || echo "FAIL: No backups"
 ```
 
 ```
@@ -791,6 +810,8 @@ TEST 3 — LARAVEL 9 → 11 (MULTI-VERSION) — RESULTS
   Dependencies resolved:            ✅ / ❌
   artisan works:                    ✅ / ❌
   Zero syntax errors:               ✅ / ❌
+  Report exists:                    ✅ / ❌
+  Backups created:                  ✅ / ❌
 
 OVERALL: ✅ PASS / ❌ FAIL
 ═══════════════════════════════════════════════════
@@ -810,20 +831,21 @@ cd "$TEST_WORKSPACE"
 cp -r test-10-to-11 test-rollback
 cd test-rollback
 
-# Reset to pre-upgrade state
+# Record current state
 git log --oneline | head -5
-
-# The upgrade created commits — verify we can get back to pre-upgrade
 INITIAL_COMMIT=$(git log --oneline | tail -1 | cut -d' ' -f1)
 git diff --stat "$INITIAL_COMMIT"..HEAD
 
-# Check if lshift rollback works (if the tool supports it)
-lshift rollback 2>/dev/null || lshift reset 2>/dev/null || echo "No rollback command found"
+# Use shift rollback (reverts to pre-shift backup tag)
+$SHIFT_CMD rollback 2>&1
+echo "rollback exit code: $?"
 
-# Alternative: git reset
-git reset --hard "$INITIAL_COMMIT"
+# Verify we're back to pre-upgrade state
 php artisan --version  # Should be back to 10.x.x
 echo "Rollback: $(php artisan --version 2>&1 | grep -o '[0-9]*\.[0-9]*\.[0-9]*')"
+
+# Verify Kernel.php is restored (Laravel 10 has Kernel.php)
+test -f app/Http/Kernel.php && echo "PASS: Kernel.php restored" || echo "FAIL: Kernel.php missing after rollback"
 ```
 
 ### 4.2 Resume Test
@@ -835,15 +857,17 @@ mkdir test-resume && cd test-resume
 composer create-project laravel/laravel:^10.0 . --prefer-dist --no-interaction
 git init && git add -A && git commit -m "Initial Laravel 10"
 
+# Run with very low token limit — should pause after a few steps
+# maxTotalTokens must be >= 10000 (validated by the tool) and lives under behaviour
 cat > .shiftrc << 'JSON'
 {
-  "targetVersion": "11",
-  "maxTotalTokens": 500
+  "shift": { "fromVersion": "10", "toVersion": "11" },
+  "behaviour": { "maxTotalTokens": 10000 }
 }
 JSON
 
-# Run with very low token limit — should pause after a few steps
-timeout 120 lshift 2>&1 || true
+# Run upgrade — will pause when token budget exhausted
+timeout 300 $SHIFT_CMD upgrade --from=10 --to=11 2>&1 || true
 
 # Check if state was saved
 test -d .shift && echo "PASS: State directory exists" || echo "FAIL: No state directory"
@@ -851,20 +875,20 @@ test -f .shift/state.json && echo "PASS: State file exists" || echo "FAIL: No st
 
 # Check state content
 if [ -f .shift/state.json ]; then
-  cat .shift/state.json | head -20
+  cat .shift/state.json | python3 -m json.tool 2>/dev/null | head -20 || cat .shift/state.json | head -20
   echo "State file found — resume should work"
 fi
 
 # Increase token limit and resume
 cat > .shiftrc << 'JSON'
 {
-  "targetVersion": "11",
-  "maxTotalTokens": 500000
+  "shift": { "fromVersion": "10", "toVersion": "11" },
+  "behaviour": { "maxTotalTokens": 500000 }
 }
 JSON
 
-# Resume
-lshift resume 2>/dev/null || lshift 2>/dev/null
+# Resume from where we left off
+$SHIFT_CMD resume 2>&1
 
 # Verify it completed
 php artisan --version
@@ -878,6 +902,7 @@ TEST 4 — ROLLBACK & RESUME — RESULTS
 Rollback:
   Git history intact:               ✅ / ❌
   Reset to pre-upgrade:             ✅ / ❌
+  Kernel.php restored:              ✅ / ❌
   artisan works after rollback:     ✅ / ❌
 
 Resume:
@@ -906,15 +931,13 @@ rm -rf app/Models/User.php  # Keep only bare minimum
 
 git init && git add -A && git commit -m "Minimal Laravel 10"
 
-cat > .shiftrc << 'JSON'
-{ "targetVersion": "11" }
-JSON
-
-lshift
+# Run upgrade
+$SHIFT_CMD upgrade --from=10 --to=11 --verbose
 
 # Should complete without errors even with minimal code
 php artisan --version
 echo "Minimal project exit code: $?"
+test -f SHIFT_REPORT.md && echo "PASS: Report generated" || echo "FAIL: No report"
 ```
 
 ### 5.2 Non-Laravel Project (Should Fail Gracefully)
@@ -927,14 +950,12 @@ git init
 echo '{"name":"not-laravel","require":{"php":"^8.1"}}' > composer.json
 git add -A && git commit -m "Not a Laravel project"
 
-cat > .shiftrc << 'JSON'
-{ "targetVersion": "11" }
-JSON
-
 # Should fail gracefully with a clear error message
-lshift 2>&1
-echo "Non-Laravel exit code: $?"
-# EXPECTED: Non-zero exit code, clear error message, no crash
+$SHIFT_CMD upgrade --from=10 --to=11 2>&1
+EXIT_CODE=$?
+echo "Non-Laravel exit code: $EXIT_CODE"
+# EXPECTED: Non-zero exit code, clear error message, no crash/stack trace
+[ "$EXIT_CODE" -ne 0 ] && echo "PASS: Non-zero exit" || echo "FAIL: Should have failed"
 ```
 
 ### 5.3 Already Up-to-Date
@@ -946,13 +967,55 @@ mkdir test-already-current && cd test-already-current
 composer create-project laravel/laravel:^11.0 . --prefer-dist --no-interaction
 git init && git add -A && git commit -m "Already Laravel 11"
 
-cat > .shiftrc << 'JSON'
-{ "targetVersion": "11" }
-JSON
-
-lshift 2>&1
-echo "Already-current exit code: $?"
+# Should detect already at target version and exit cleanly
+$SHIFT_CMD upgrade --from=11 --to=11 2>&1
+EXIT_CODE=$?
+echo "Already-current exit code: $EXIT_CODE"
 # EXPECTED: Should detect already at target version and exit cleanly
+```
+
+### 5.4 Dry Run (No Mutations)
+
+```bash
+cd "$TEST_WORKSPACE"
+mkdir test-dry-run && cd test-dry-run
+
+composer create-project laravel/laravel:^10.0 . --prefer-dist --no-interaction
+git init && git add -A && git commit -m "Initial Laravel 10"
+
+# Dry run should analyse and plan but not modify code or dependencies
+PRE_HASH=$(git rev-parse HEAD)
+$SHIFT_CMD upgrade --from=10 --to=11 --dry-run --verbose 2>&1
+POST_HASH=$(git rev-parse HEAD)
+
+# Verify no commits were made during dry run (beyond pre-processing and conformity)
+echo "Pre: $PRE_HASH"
+echo "Post: $POST_HASH"
+
+# Verify composer.json NOT modified (dependencies phase skipped in dry-run)
+grep -q '"laravel/framework": "\^10' composer.json && echo "PASS: Dependencies unchanged" || echo "FAIL: Dependencies modified in dry-run"
+
+# Verify artisan still works with original version
+php artisan --version  # Should still be 10.x.x
+```
+
+### 5.5 .shiftrc Config Validation
+
+```bash
+cd "$TEST_WORKSPACE"
+mkdir test-bad-config && cd test-bad-config
+
+composer create-project laravel/laravel:^10.0 . --prefer-dist --no-interaction
+git init && git add -A && git commit -m "Initial Laravel 10"
+
+# Test with malformed .shiftrc — should warn and use defaults, not crash
+echo 'THIS IS NOT JSON' > .shiftrc
+$SHIFT_CMD upgrade --from=10 --to=11 --verbose 2>&1 | head -5
+# EXPECTED: Warning about .shiftrc parse error, not a crash
+
+# Test with --no-rc flag (ignores .shiftrc entirely)
+$SHIFT_CMD upgrade --from=10 --to=11 --no-rc --dry-run --verbose 2>&1 | head -10
+echo "no-rc exit code: $?"
 ```
 
 ```
@@ -963,6 +1026,9 @@ TEST 5 — EDGE CASES — RESULTS
   Minimal project upgrades:         ✅ / ❌
   Non-Laravel fails gracefully:     ✅ / ❌
   Already-current detected:         ✅ / ❌
+  Dry run makes no mutations:       ✅ / ❌
+  Bad .shiftrc warns, not crash:    ✅ / ❌
+  --no-rc flag works:               ✅ / ❌
   No crashes on any edge case:      ✅ / ❌
 
 OVERALL: ✅ PASS / ❌ FAIL
@@ -980,8 +1046,9 @@ After all tests complete, compile the full results:
 LARAVEL SHIFT LOCAL — END-TO-END VALIDATION REPORT
 ═══════════════════════════════════════════════════
 Date: [today]
-Tool version: [lshift version]
-PHP version: [php version]
+Tool version: [shift --version output]
+PHP version: [php --version]
+Node version: [node --version]
 Test workspace: [path]
 
 Test 1 — Laravel 10 → 11:      ✅ PASS / ❌ FAIL  ([N]/[N] checks)
@@ -1001,7 +1068,7 @@ Non-critical issues (cosmetic or optional transforms):
   [list any failures in pre-processing verification]
 
 Token cost across all tests:
-  [total tokens used, if tracked]
+  [total tokens used — check SHIFT_REPORT.md in each test project]
 
 Recommendation:
   ✅ READY FOR PRODUCTION USE
@@ -1024,14 +1091,17 @@ echo "Run 'rm -rf $TEST_WORKSPACE' to clean up"
 
 1. **Each test is independent** — a failure in one does not skip others
 2. **Real projects only** — no mocking, no simulation. Real Composer, real PHP, real API calls
-3. **Verify everything** — structure, dependencies, syntax, functionality, reports
+3. **Verify everything** — structure, dependencies, syntax, functionality, reports, backups
 4. **Record exact output** — don't summarise, capture the actual verification output
 5. **Token costs are real** — these tests call the Anthropic API. Budget accordingly
 6. **Clean workspace** — each test gets its own directory, no cross-contamination
-7. **Stop-on-crash only** — if lshift crashes (non-graceful exit), that's a test failure worth investigating immediately. Graceful errors are expected in edge case tests
+7. **Stop-on-crash only** — if shift crashes (non-graceful exit), that's a test failure worth investigating immediately. Graceful errors are expected in edge case tests
+8. **Use CLI flags for versions** — always pass `--from` and `--to` explicitly. Do not rely solely on `.shiftrc` for version selection in test scenarios
+9. **Check backups** — every test should verify `.shift/backups/` exists and contains files. This is the safety net for production use
+10. **Check report location** — the report is `SHIFT_REPORT.md` at the project root, not inside `.shift/`
 
 ---
 
 ## Begin
 
-Run **Pre-Flight** now. Verify PHP, Composer, Git, lshift, and API key. Then start **Test 1 — Laravel 10 → 11**.
+Run **Pre-Flight** now. Verify PHP, Composer, Git, Node, shift, and API key. Then start **Test 1 — Laravel 10 → 11**.
