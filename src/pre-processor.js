@@ -6,7 +6,7 @@
  * eliminating LLM hallucination risk for well-defined changes.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, renameSync } from 'node:fs';
 import { join, dirname, basename, resolve, sep } from 'node:path';
 import { glob } from 'glob';
 import { getApplicableTransforms } from './transforms/index.js';
@@ -29,7 +29,10 @@ function safeWriteFile(projectRoot, absPath, content) {
     copyFileSync(absPath, join(backupDir, basename(absPath)));
   }
 
-  writeFileSync(absPath, content, 'utf8');
+  // R10-002 FIX: Atomic write — write to temp then rename to prevent partial writes on crash
+  const tmp = absPath + '.tmp';
+  writeFileSync(tmp, content, 'utf8');
+  renameSync(tmp, absPath);
 }
 
 /**
@@ -89,10 +92,12 @@ async function runSingleTransform(transform, projectRoot, options = {}) {
   const pattern = transform.glob;
   let files;
   try {
+    // R10-016 FIX: Add follow: false to prevent following symlinks into loops
     files = await glob(pattern, {
       cwd: projectRoot,
       nodir: true,
       ignore: ['vendor/**', 'node_modules/**', 'storage/**'],
+      follow: false,
     });
   } catch {
     files = [];

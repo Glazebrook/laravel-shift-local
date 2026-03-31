@@ -13,7 +13,7 @@ import { GitManager } from './git-manager.js';
 import { FileTools } from './file-tools.js';
 import { existsSync, writeFileSync, unlinkSync, readFileSync, mkdirSync, statSync, utimesSync, readdirSync, copyFileSync } from 'node:fs';
 import { hostname } from 'node:os';
-import { join, dirname, basename } from 'node:path';
+import { join, dirname, basename, resolve, sep } from 'node:path';
 import { AnalyzerAgent } from './agents/analyzer-agent.js';
 import { PlannerAgent } from './agents/planner-agent.js';
 import { DependencyAgent } from './agents/dependency-agent.js';
@@ -22,7 +22,7 @@ import { ValidatorAgent } from './agents/validator-agent.js';
 import { ReporterAgent } from './agents/reporter-agent.js';
 
 import { createApiClient } from './api-provider.js';
-import { ShiftBaseError } from './errors.js';
+import { ShiftBaseError, GitError } from './errors.js';
 import { execCommand, execCommandSync } from './shell.js';
 // L1 FIX: Use shared sleep utility instead of duplicating
 import { sleep } from './utils.js';
@@ -49,6 +49,10 @@ const LOCK_HEARTBEAT_INTERVAL_MS = 300_000;      // 5 min between lock file touc
 export function postTransformChecks(projectRoot, toVersion) {
   const issues = [];
 
+  // R10-012 FIX: Resolve project root prefix for path validation
+  const resolvedRoot = resolve(projectRoot);
+  const rootPrefix = resolvedRoot + sep;
+
   // 1. Config files must return arrays
   const configDir = join(projectRoot, 'config');
   if (existsSync(configDir)) {
@@ -56,7 +60,17 @@ export function postTransformChecks(projectRoot, toVersion) {
 
     for (const file of configFiles) {
       const filePath = join(configDir, file);
-      const content = readFileSync(filePath, 'utf-8');
+      // R10-012 FIX: Validate resolved path stays within project root
+      const resolvedFile = resolve(filePath);
+      if (resolvedFile !== resolvedRoot && !resolvedFile.startsWith(rootPrefix)) continue;
+
+      let content;
+      try {
+        content = readFileSync(filePath, 'utf-8');
+      } catch (err) {
+        // Unreadable config file — skip
+        continue;
+      }
 
       const stripped = content
         .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -113,9 +127,18 @@ export function postTransformChecks(projectRoot, toVersion) {
 
     for (const relPath of tombstoneCandidates) {
       const filePath = join(projectRoot, relPath);
+      // R10-012 FIX: Validate resolved path stays within project root
+      const resolvedTomb = resolve(filePath);
+      if (resolvedTomb !== resolvedRoot && !resolvedTomb.startsWith(rootPrefix)) continue;
       if (!existsSync(filePath)) continue;
 
-      const content = readFileSync(filePath, 'utf-8');
+      let content;
+      try {
+        content = readFileSync(filePath, 'utf-8');
+      } catch {
+        // Unreadable tombstone candidate — skip
+        continue;
+      }
       const stripped = content
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .replace(/\/\/.*/g, '')
@@ -487,7 +510,13 @@ export class Orchestrator {
     }
 
     try {
-      const composerJson = JSON.parse(readFileSync(join(this.projectPath, 'composer.json'), 'utf-8'));
+      // R10-010 FIX: Validate path stays within project root before reading
+      const composerPath = resolve(this.projectPath, 'composer.json');
+      const projectPrefix = resolve(this.projectPath) + sep;
+      if (!composerPath.startsWith(projectPrefix) && composerPath !== resolve(this.projectPath)) {
+        throw new ShiftError('SHIFT_ERR_NOT_LARAVEL', 'composer.json path validation failed');
+      }
+      const composerJson = JSON.parse(readFileSync(composerPath, 'utf-8'));
       const requires = { ...composerJson.require, ...composerJson['require-dev'] };
       if (!requires['laravel/framework']) {
         throw new ShiftError('SHIFT_ERR_NOT_LARAVEL',
@@ -508,13 +537,15 @@ export class Orchestrator {
     this._acquireLock();
 
     // Git check
+    // R10-020 FIX: Use structured GitError instead of bare Error
     if (!await this.git.isGitRepo()) {
-      throw new Error('Project must be a git repository. Run: git init && git add -A && git commit -m "Initial commit"');
+      throw new GitError('Project must be a git repository. Run: git init && git add -A && git commit -m "Initial commit"');
     }
 
-    // Anthropic API key
-    if (!process.env.ANTHROPIC_API_KEY) {
-      throw new Error('ANTHROPIC_API_KEY environment variable not set');
+    // API credential check — provider-aware (R7-003 FIX)
+    // R10-021 FIX: Use structured ShiftBaseError instead of bare Error
+    if (this._provider !== 'bedrock' && !process.env.ANTHROPIC_API_KEY) {
+      throw new ShiftBaseError('SHIFT_ERR_CONFIG', 'ANTHROPIC_API_KEY environment variable not set');
     }
 
     // H9 FIX: Check binaries with Windows shell support
@@ -1013,10 +1044,11 @@ export class Orchestrator {
     }
 
     // Regenerate autoloader
+    // R10-006 FIX: Use envKeys allowlist instead of useProcessEnv to avoid leaking secrets.
     const autoloadResult = await execCommand('composer', ['dump-autoload', '--no-interaction'], {
       cwd: this.projectPath,
       timeout: 60_000,
-      useProcessEnv: true,
+      envKeys: ['PHP_INI_SCAN_DIR', 'COMPOSER_HOME', 'COMPOSER_AUTH', 'APP_ENV', 'APPDATA'],
     });
     if (autoloadResult.ok) {
       await this.logger.info('Orchestrator', 'Regenerated autoloader');
@@ -1028,7 +1060,7 @@ export class Orchestrator {
     const discoverResult = await execCommand('php', ['artisan', 'package:discover', '--ansi'], {
       cwd: this.projectPath,
       timeout: 30_000,
-      useProcessEnv: true,
+      envKeys: ['PHP_INI_SCAN_DIR', 'COMPOSER_HOME', 'APP_ENV'],
     });
     if (discoverResult.ok) {
       await this.logger.info('Orchestrator', 'Regenerated package discovery');
@@ -1120,10 +1152,9 @@ export class Orchestrator {
       }
     }
 
-    // Pass provider info so the reporter can calculate costs
-    s.provider = this._provider;
-    s.getPricing = this._getPricing;
-    const report = await this.agents.reporter.generateReport(s);
+    // Pass provider info so the reporter can calculate costs (without mutating state)
+    const reportContext = { ...s, provider: this._provider, getPricing: this._getPricing };
+    const report = await this.agents.reporter.generateReport(reportContext);
     this._captureTokenUsage('reporter');
     this.state.set('report', report);
     await this._phaseCommit('report', 'SHIFT_REPORT.md generated');

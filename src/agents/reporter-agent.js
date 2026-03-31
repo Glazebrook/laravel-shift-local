@@ -131,6 +131,7 @@ Return the structured JSON now.`,
       styleResult: state.styleResult,
       routeCheck: validation?.routeCheck,
       blueprint: state.blueprint,
+      provider, getPricing,
     });
 
     const reportRelPath = 'SHIFT_REPORT.md';
@@ -162,7 +163,7 @@ Return the structured JSON now.`,
 
   _renderReport(data, context) {
     const { fromVersion, toVersion, branchName, transformations, validation, gitLog, phaseTimings, tokenUsage,
-      preProcessingResult, conformityReport, styleResult, routeCheck, blueprint } = context;
+      preProcessingResult, conformityReport, styleResult, routeCheck, blueprint, provider, getPricing } = context;
 
     // M3 FIX: Calculate total duration
     const totalMs = Object.values(phaseTimings).reduce((sum, t) => sum + (t.durationMs || 0), 0);

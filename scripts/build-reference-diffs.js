@@ -10,7 +10,7 @@
  * Usage: node scripts/build-reference-diffs.js
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
@@ -25,8 +25,8 @@ function log(msg) {
   console.log(`[build-reference-diffs] ${msg}`);
 }
 
-function exec(cmd, opts = {}) {
-  return execSync(cmd, { encoding: 'utf8', timeout: 120_000, ...opts }).trim();
+function exec(cmd, args = [], opts = {}) {
+  return execFileSync(cmd, args, { encoding: 'utf8', timeout: 120_000, ...opts }).trim();
 }
 
 /**
@@ -43,7 +43,7 @@ function cloneRepo(version) {
 
   try {
     log(`  Cloning ${repoUrl}...`);
-    exec(`git clone --depth 1 ${repoUrl} "${localPath}"`, { stdio: 'pipe' });
+    exec('git', ['clone', '--depth', '1', repoUrl, localPath], { stdio: 'pipe' });
     return localPath;
   } catch {
     log(`  Repository laravel-${version}.x not found — skipping`);
@@ -92,7 +92,7 @@ function getRepoFiles(repoPath) {
 function diffFiles(fileA, fileB) {
   try {
     // git diff --no-index exits with 1 when files differ (not an error)
-    return exec(`git diff --no-index --unified=3 "${fileA}" "${fileB}"`, { stdio: 'pipe' });
+    return exec('git', ['diff', '--no-index', '--unified=3', fileA, fileB], { stdio: 'pipe' });
   } catch (err) {
     // Exit code 1 = files differ (expected), capture stdout
     if (err.stdout) return err.stdout.trim();

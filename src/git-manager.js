@@ -30,10 +30,17 @@ export class GitManager {
       }
     }
     const timeout = opts.timeout || DEFAULT_TIMEOUT;
+    // SEC-201 FIX: Use envKeys allowlist instead of useProcessEnv to avoid leaking
+    // ANTHROPIC_API_KEY and other secrets into git subprocesses.
+    // Git needs SSH/GPG keys and identity env vars; the rest are covered by BASE_ENV_KEYS.
     return execCommand('git', args, {
       cwd: this.cwd,
       timeout,
-      useProcessEnv: true,
+      envKeys: [
+        'GIT_SSH_COMMAND', 'GIT_SSH', 'SSH_AUTH_SOCK', 'SSH_AGENT_PID',
+        'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL',
+        'GPG_AGENT_INFO', 'GNUPGHOME', 'GIT_CONFIG_GLOBAL', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+      ],
     });
   }
 

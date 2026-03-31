@@ -65,7 +65,8 @@ async function findRouteFiles(projectRoot) {
 
   const files = new Set();
   for (const pattern of patterns) {
-    const matches = await glob(pattern, { cwd: projectRoot, nodir: true });
+    // R10-015 FIX: Add follow: false to prevent following symlinks into loops
+    const matches = await glob(pattern, { cwd: projectRoot, nodir: true, follow: false });
     for (const m of matches) files.add(m);
   }
   return [...files];
@@ -75,9 +76,11 @@ async function findRouteFiles(projectRoot) {
  * Build a map of controller classes to their methods and visibility.
  */
 async function buildControllerMap(projectRoot) {
+  // R10-015 FIX: Add follow: false to prevent following symlinks into loops
   const controllerFiles = await glob('app/Http/Controllers/**/*.php', {
     cwd: projectRoot,
     nodir: true,
+    follow: false,
   });
 
   const map = new Map();

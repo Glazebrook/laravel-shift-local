@@ -169,4 +169,19 @@ export function execCommandSync(command, args = [], options = {}) {
   }
 }
 
+/**
+ * Build a minimal, safe environment for subprocess calls.
+ * Never leaks secrets (API keys, tokens, etc.) from process.env.
+ *
+ * Always includes the core OS keys (PATH, HOME, USERPROFILE, TEMP/TMP, etc.).
+ * Pass `additionalKeys` for command-specific variables (e.g. SSH_AUTH_SOCK for
+ * git, PHP_INI_SCAN_DIR for PHP, COMPOSER_HOME for Composer).
+ *
+ * @param {string[]} additionalKeys - Extra process.env keys to include beyond the base set.
+ * @returns {object} Minimal environment object safe for subprocess execution.
+ */
+export function createSafeEnv(additionalKeys = []) {
+  return buildMinimalEnv(additionalKeys);
+}
+
 export { SAFE_ARG_RE, BASE_ENV_KEYS, buildMinimalEnv };

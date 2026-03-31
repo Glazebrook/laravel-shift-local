@@ -118,8 +118,9 @@ export function createApiClient(config = {}) {
 
   let client;
   if (provider === 'bedrock') {
-    // Set AWS_PROFILE so the SDK credential chain picks up the right account
-    if (bedrockOpts.profile) {
+    // R7-005 FIX: Only set AWS_PROFILE if not already set, to avoid
+    // clobbering an existing value from the user's shell environment
+    if (bedrockOpts.profile && !process.env.AWS_PROFILE) {
       process.env.AWS_PROFILE = bedrockOpts.profile;
     }
     const opts = {};

@@ -46,7 +46,7 @@ export class ValidatorAgent extends BaseAgent {
     }
 
     // 2a. Clear bootstrap cache as safety net (stale provider references)
-    this._clearBootstrapCache();
+    await this._clearBootstrapCache();
 
     // 2b. Clear all artisan caches before validation
     await this.logger.info(this.name, 'Clearing artisan caches...');
@@ -158,14 +158,14 @@ export class ValidatorAgent extends BaseAgent {
     });
   }
 
-  _clearBootstrapCache() {
+  async _clearBootstrapCache() {
     const cacheDir = join(this.projectPath, 'bootstrap', 'cache');
     if (!existsSync(cacheDir)) return;
     const cacheFiles = readdirSync(cacheDir).filter(f => f.endsWith('.php'));
     for (const file of cacheFiles) {
       try {
         unlinkSync(join(cacheDir, file));
-        this.logger.info(this.name, `Cleared stale cache: bootstrap/cache/${file}`);
+        await this.logger.info(this.name, `Cleared stale cache: bootstrap/cache/${file}`);
       } catch { /* best effort */ }
     }
   }

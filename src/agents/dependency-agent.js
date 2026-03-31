@@ -72,11 +72,16 @@ After updating, output a JSON summary of what changed.`;
       if (!subCmd || !ALLOWED_COMPOSER_CMDS.includes(subCmd)) {
         return { ok: false, error: `Blocked disallowed composer command: '${subCmd}'. Allowed: ${ALLOWED_COMPOSER_CMDS.join(', ')}` };
       }
-      // Centralised via shell.js — arg validation + Windows shell handled automatically.
+      // SEC-215 FIX: Use envKeys allowlist instead of useProcessEnv to avoid leaking
+      // API keys and other secrets (e.g. ANTHROPIC_API_KEY) into composer subprocesses.
       const result = await execCommand('composer', args, {
         cwd: this.projectPath,
         timeout: composerTimeout,
-        useProcessEnv: true,
+        envKeys: [
+          'PATH', 'HOME', 'USERPROFILE', 'COMPOSER_HOME', 'COMPOSER_AUTH',
+          'PHP_INI_SCAN_DIR', 'APP_ENV', 'TEMP', 'TMP',
+          'SystemRoot', 'SYSTEMROOT', 'APPDATA',
+        ],
       });
       if (result.ok) {
         return { ok: true, stdout: result.stdout.substring(0, 3000), stderr: result.stderr.substring(0, 500) };

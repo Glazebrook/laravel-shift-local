@@ -21,7 +21,7 @@
  * Runs as a project-level transform (not per-file) in the pre-processing phase.
  */
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync, rmdirSync, copyFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync, rmdirSync, copyFileSync, renameSync } from 'node:fs';
 import { join, dirname, basename, resolve, sep } from 'node:path';
 
 // Default Laravel 10 global middleware (built into L11 framework)
@@ -474,7 +474,10 @@ export default {
     const bootstrapAppPath = join(projectRoot, 'bootstrap', 'app.php');
     validatePath(projectRoot, bootstrapAppPath);
     backupFile(projectRoot, 'bootstrap/app.php');
-    writeFileSync(bootstrapAppPath, newBootstrapApp, 'utf-8');
+    // R10-003 FIX: Atomic write — write to temp then rename
+    const bootstrapTmp = bootstrapAppPath + '.tmp';
+    writeFileSync(bootstrapTmp, newBootstrapApp, 'utf-8');
+    renameSync(bootstrapTmp, bootstrapAppPath);
     results.filesModified.push('bootstrap/app.php');
 
     // ── STEP 5: Generate bootstrap/providers.php ──
@@ -484,7 +487,10 @@ export default {
     const providersPath = join(projectRoot, 'bootstrap', 'providers.php');
     validatePath(projectRoot, providersPath);
     mkdirSync(dirname(providersPath), { recursive: true });
-    writeFileSync(providersPath, providersContent, 'utf-8');
+    // R10-003 FIX: Atomic write — write to temp then rename
+    const providersTmp = providersPath + '.tmp';
+    writeFileSync(providersTmp, providersContent, 'utf-8');
+    renameSync(providersTmp, providersPath);
     results.filesCreated.push('bootstrap/providers.php');
 
     // ── STEP 6: Delete old structural files ──
@@ -554,7 +560,10 @@ export default {
 
       if (testCase !== original) {
         validatePath(projectRoot, testCasePath);
-        writeFileSync(testCasePath, testCase, 'utf-8');
+        // R10-003 FIX: Atomic write — write to temp then rename
+        const testCaseTmp = testCasePath + '.tmp';
+        writeFileSync(testCaseTmp, testCase, 'utf-8');
+        renameSync(testCaseTmp, testCasePath);
         results.filesModified.push('tests/TestCase.php');
       }
     }

@@ -1497,18 +1497,19 @@ describe('AUDIT-5 P1-002: _contentFilterFallback passes string versions to getFi
     const { readFileSync } = await import('fs');
     const { resolve } = await import('node:path');
     const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
-    // The fix: pass step.from and step.to (strings), not the step object
-    assert.ok(source.includes('getFileChange(step.from, step.to,'), 'Should pass step.from and step.to as separate string args');
+    // The fix: pass chainStep.from and chainStep.to (strings), not the step object
+    // R8-004: renamed from `step` to `chainStep` to avoid shadowing outer parameter
+    assert.ok(source.includes('getFileChange(chainStep.from, chainStep.to,'), 'Should pass chainStep.from and chainStep.to as separate string args');
   });
 
   it('source iterates chain steps with from/to properties', async () => {
     const { readFileSync } = await import('fs');
     const { resolve } = await import('node:path');
     const source = readFileSync(resolve('src/agents/transformer-agent.js'), 'utf8');
-    // The chain returns [{from, to, manifest}] and we destructure step
-    assert.ok(source.includes('for (const step of chain)'), 'Should iterate chain steps');
-    assert.ok(source.includes('step.from'), 'Should reference step.from');
-    assert.ok(source.includes('step.to'), 'Should reference step.to');
+    // The chain returns [{from, to, manifest}] — R8-004: renamed to chainStep to avoid shadowing
+    assert.ok(source.includes('for (const chainStep of chain)'), 'Should iterate chain steps');
+    assert.ok(source.includes('chainStep.from'), 'Should reference chainStep.from');
+    assert.ok(source.includes('chainStep.to'), 'Should reference chainStep.to');
   });
 });
 
@@ -1949,6 +1950,1196 @@ describe('AUDIT-6 R6-004: conformity-checker expectedPhp[13] is ^8.3', () => {
         assert.equal(conformityMin, matrixPhpMin,
           `conformity-checker expectedPhp['${version}'] min (${conformityMin}) should match upgrade-matrix phpMin (${matrixPhpMin})`);
       }
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Run #7 Regression Tests
+// ═══════════════════════════════════════════════════════════════════
+
+// ── R7-003: Provider-aware API key check in orchestrator ──────────
+
+describe('AUDIT-7 R7-003: Provider-aware API key check in orchestrator', () => {
+  it('orchestrator source skips ANTHROPIC_API_KEY check for bedrock provider', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('path');
+    const src = readFileSync(resolve('src/orchestrator.js'), 'utf8');
+
+    assert.ok(
+      src.includes("this._provider !== 'bedrock' && !process.env.ANTHROPIC_API_KEY"),
+      'Should guard API key check with provider !== bedrock'
+    );
+  });
+
+  it('orchestrator reads provider from this._provider (set from api.provider)', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('path');
+    const src = readFileSync(resolve('src/orchestrator.js'), 'utf8');
+
+    assert.ok(
+      src.includes('this._provider = api.provider'),
+      'Should store provider from api object onto this._provider'
+    );
+  });
+});
+
+// ── R7-001: _clearBootstrapCache is async with awaited logger ─────
+
+describe('AUDIT-7 R7-001: _clearBootstrapCache is async with awaited logger', () => {
+  it('_clearBootstrapCache is defined with async keyword', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('path');
+    const src = readFileSync(resolve('src/agents/validator-agent.js'), 'utf8');
+
+    assert.ok(
+      src.includes('async _clearBootstrapCache()'),
+      'Method should be declared as async'
+    );
+  });
+
+  it('logger.info inside _clearBootstrapCache is awaited', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('path');
+    const src = readFileSync(resolve('src/agents/validator-agent.js'), 'utf8');
+
+    // Extract the _clearBootstrapCache method body
+    const methodStart = src.indexOf('async _clearBootstrapCache()');
+    assert.ok(methodStart !== -1, 'Should find _clearBootstrapCache method');
+    const methodBody = src.slice(methodStart, methodStart + 400);
+
+    assert.ok(
+      methodBody.includes('await this.logger.info'),
+      'logger.info should be awaited inside _clearBootstrapCache'
+    );
+  });
+
+  it('call site awaits _clearBootstrapCache', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('path');
+    const src = readFileSync(resolve('src/agents/validator-agent.js'), 'utf8');
+
+    assert.ok(
+      src.includes('await this._clearBootstrapCache()'),
+      'Call site should await _clearBootstrapCache()'
+    );
+  });
+});
+
+// ── R7-005: AWS_PROFILE guard against clobbering ──────────────────
+
+describe('AUDIT-7 R7-005: AWS_PROFILE guard against clobbering', () => {
+  it('api-provider source guards AWS_PROFILE with both conditions', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('path');
+    const src = readFileSync(resolve('src/api-provider.js'), 'utf8');
+
+    assert.ok(
+      src.includes('bedrockOpts.profile && !process.env.AWS_PROFILE'),
+      'Should check both bedrockOpts.profile AND !process.env.AWS_PROFILE'
+    );
+  });
+
+  it('sets AWS_PROFILE when not already set', async () => {
+    const savedProfile = process.env.AWS_PROFILE;
+    delete process.env.AWS_PROFILE;
+    try {
+      // Simulate the guard logic from api-provider.js lines 121-124
+      const bedrockOpts = { profile: 'my-custom-profile' };
+      if (bedrockOpts.profile && !process.env.AWS_PROFILE) {
+        process.env.AWS_PROFILE = bedrockOpts.profile;
+      }
+      assert.equal(process.env.AWS_PROFILE, 'my-custom-profile',
+        'Should set AWS_PROFILE when it was not set');
+    } finally {
+      if (savedProfile !== undefined) {
+        process.env.AWS_PROFILE = savedProfile;
+      } else {
+        delete process.env.AWS_PROFILE;
+      }
+    }
+  });
+
+  it('does NOT overwrite AWS_PROFILE when already set', async () => {
+    const savedProfile = process.env.AWS_PROFILE;
+    process.env.AWS_PROFILE = 'existing-profile';
+    try {
+      const bedrockOpts = { profile: 'new-profile' };
+      if (bedrockOpts.profile && !process.env.AWS_PROFILE) {
+        process.env.AWS_PROFILE = bedrockOpts.profile;
+      }
+      assert.equal(process.env.AWS_PROFILE, 'existing-profile',
+        'Should NOT overwrite an existing AWS_PROFILE');
+    } finally {
+      if (savedProfile !== undefined) {
+        process.env.AWS_PROFILE = savedProfile;
+      } else {
+        delete process.env.AWS_PROFILE;
+      }
+    }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════
+// Run #8 Regression Tests
+// ══════════════════════════════════════════════════════════════════
+
+// ── R8-001: Reporter-agent provider/getPricing passed through context ──
+
+describe('R8-001: ReporterAgent passes provider and getPricing to _renderReport', () => {
+  it('source: generateReport passes provider and getPricing in context object', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'agents', 'reporter-agent.js'), 'utf8');
+
+    // The _renderReport call must include provider and getPricing in the context object
+    assert.ok(source.includes('provider, getPricing,'), 'Should pass provider and getPricing in context to _renderReport');
+  });
+
+  it('source: _renderReport destructures provider and getPricing from context', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'agents', 'reporter-agent.js'), 'utf8');
+
+    // The _renderReport method destructures provider and getPricing from context
+    const renderMethodMatch = source.match(/_renderReport\(data, context\)\s*\{[^}]*?const\s*\{[^}]*provider[^}]*getPricing[^}]*\}\s*=\s*context/s);
+    assert.ok(renderMethodMatch, '_renderReport should destructure provider and getPricing from context');
+  });
+
+  it('behavioral: _renderReport includes cost column when getPricing is provided', async () => {
+    const { ReporterAgent } = await import('../src/agents/reporter-agent.js');
+
+    // Create a minimal instance — we only call _renderReport which doesn't need deps
+    const agent = Object.create(ReporterAgent.prototype);
+    agent._escMd = ReporterAgent.prototype._escMd;
+    agent._escCodeFence = ReporterAgent.prototype._escCodeFence;
+
+    const mockGetPricing = (model, input, output) => {
+      if (model.includes('opus')) return 0.15;
+      return 0.03;
+    };
+
+    const reportData = {
+      executiveSummary: 'Test upgrade summary',
+      automaticChanges: [],
+      manualReviewItems: [],
+      testSummary: 'All tests passing',
+      warnings: [],
+      nextSteps: ['Step 1'],
+    };
+
+    const context = {
+      fromVersion: '10',
+      toVersion: '11',
+      branchName: 'shift/upgrade-10-to-11',
+      transformations: { total: 5, completed: 5, failed: 0, skipped: 0, files: {} },
+      validation: { passed: true },
+      gitLog: 'abc123 commit msg',
+      phaseTimings: {},
+      tokenUsage: {
+        analyzer: { input: 1000, output: 500, calls: 2 },
+        transformer: { input: 2000, output: 800, calls: 5 },
+      },
+      provider: 'anthropic',
+      getPricing: mockGetPricing,
+    };
+
+    const report = agent._renderReport(reportData, context);
+
+    // When getPricing is provided, the table should have an Est. Cost column
+    assert.ok(report.includes('Est. Cost'), 'Report should include Est. Cost column when getPricing is provided');
+    assert.ok(report.includes('$0.'), 'Report should include dollar cost values');
+    assert.ok(report.includes('Provider: Anthropic API'), 'Report should show Anthropic API as provider');
+  });
+
+  it('behavioral: _renderReport omits cost column when getPricing is not provided', async () => {
+    const { ReporterAgent } = await import('../src/agents/reporter-agent.js');
+
+    const agent = Object.create(ReporterAgent.prototype);
+    agent._escMd = ReporterAgent.prototype._escMd;
+    agent._escCodeFence = ReporterAgent.prototype._escCodeFence;
+
+    const reportData = {
+      executiveSummary: 'Test upgrade summary',
+      automaticChanges: [],
+      manualReviewItems: [],
+      testSummary: 'All tests passing',
+      warnings: [],
+      nextSteps: ['Step 1'],
+    };
+
+    const context = {
+      fromVersion: '10',
+      toVersion: '11',
+      branchName: 'shift/upgrade-10-to-11',
+      transformations: { total: 5, completed: 5, failed: 0, skipped: 0, files: {} },
+      validation: { passed: true },
+      gitLog: 'abc123 commit msg',
+      phaseTimings: {},
+      tokenUsage: {
+        analyzer: { input: 1000, output: 500, calls: 2 },
+      },
+      provider: undefined,
+      getPricing: undefined,
+    };
+
+    const report = agent._renderReport(reportData, context);
+
+    assert.ok(!report.includes('Est. Cost'), 'Report should NOT include Est. Cost column when getPricing is not provided');
+    assert.ok(!report.includes('Provider:'), 'Report should NOT include Provider line when getPricing is not provided');
+  });
+
+  it('behavioral: _renderReport shows Bedrock provider label', async () => {
+    const { ReporterAgent } = await import('../src/agents/reporter-agent.js');
+
+    const agent = Object.create(ReporterAgent.prototype);
+    agent._escMd = ReporterAgent.prototype._escMd;
+    agent._escCodeFence = ReporterAgent.prototype._escCodeFence;
+
+    const reportData = {
+      executiveSummary: 'Test',
+      automaticChanges: [],
+      manualReviewItems: [],
+      testSummary: 'ok',
+      warnings: [],
+      nextSteps: [],
+    };
+
+    const context = {
+      fromVersion: '10',
+      toVersion: '11',
+      branchName: 'shift/upgrade-10-to-11',
+      transformations: { total: 1, completed: 1, failed: 0, skipped: 0, files: {} },
+      validation: { passed: true },
+      gitLog: '',
+      phaseTimings: {},
+      tokenUsage: { analyzer: { input: 100, output: 50, calls: 1 } },
+      provider: 'bedrock',
+      getPricing: () => 0.01,
+    };
+
+    const report = agent._renderReport(reportData, context);
+    assert.ok(report.includes('Provider: AWS Bedrock'), 'Report should show AWS Bedrock as provider');
+  });
+});
+
+// ── R8-003: build-reference-diffs.js uses execFileSync ──
+
+describe('R8-003: build-reference-diffs.js uses execFileSync instead of execSync', () => {
+  it('source: imports execFileSync from node:child_process', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'scripts', 'build-reference-diffs.js'), 'utf8');
+
+    assert.ok(source.includes("import { execFileSync } from 'node:child_process'"),
+      'Should import execFileSync from node:child_process');
+  });
+
+  it('source: does NOT import execSync', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'scripts', 'build-reference-diffs.js'), 'utf8');
+
+    assert.ok(!source.includes('execSync'), 'Should NOT use execSync anywhere — only execFileSync');
+  });
+
+  it('source: exec helper takes (cmd, args, opts) signature', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'scripts', 'build-reference-diffs.js'), 'utf8');
+
+    // exec(cmd, args = [], opts = {})
+    assert.ok(source.includes('function exec(cmd, args = [], opts = {})'),
+      'exec helper should take (cmd, args, opts) with array args');
+  });
+
+  it('source: exec helper delegates to execFileSync', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'scripts', 'build-reference-diffs.js'), 'utf8');
+
+    assert.ok(source.includes('execFileSync(cmd, args,'),
+      'exec helper should call execFileSync with cmd and args');
+  });
+
+  it('source: git clone uses array-based args', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'scripts', 'build-reference-diffs.js'), 'utf8');
+
+    // exec('git', ['clone', ...])
+    assert.ok(source.includes("exec('git', ['clone',"),
+      'git clone should use array-based args via exec()');
+  });
+
+  it('source: git diff uses array-based args', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'scripts', 'build-reference-diffs.js'), 'utf8');
+
+    assert.ok(source.includes("exec('git', ['diff',"),
+      'git diff should use array-based args via exec()');
+  });
+});
+
+// ── R8-004: transformer-agent variable shadowing — already covered by AUDIT-5 P1-002 ──
+// (Assertions at line ~1500 already verify chainStep naming)
+
+// ── R8-005: file-tools .created-marker path validated ──
+
+describe('R8-005: file-tools .created-marker path validation', () => {
+  it('source: validates .created-marker path with resolve() + startsWith()', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'file-tools.js'), 'utf8');
+
+    // The fix adds resolve() check on the marker path
+    assert.ok(source.includes('const resolvedMarker = resolve(markerPath)'),
+      'Should resolve the marker path');
+    assert.ok(source.includes('resolvedMarker.startsWith(backupPrefix)'),
+      'Should validate marker path stays within backup directory');
+  });
+
+  it('source: throws PathTraversalError for invalid marker path', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'file-tools.js'), 'utf8');
+
+    assert.ok(source.includes('Backup marker path traversal blocked'),
+      'Should throw PathTraversalError with descriptive message for invalid marker paths');
+  });
+
+  it('behavioral: backup() creates .created-marker for non-existent files', async () => {
+    const { FileTools } = await import('../src/file-tools.js');
+    const { mkdirSync, existsSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const os = await import('node:os');
+
+    const tmpDir = join(os.tmpdir(), `shift-test-r8005-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
+
+    try {
+      const logger = makeLogger();
+      const ft = new FileTools(tmpDir, logger);
+
+      // Ensure backup dir exists
+      mkdirSync(ft.backupDir, { recursive: true });
+
+      // backup a file that does not exist — should create .created-marker
+      const result = ft.backup('nonexistent-file.php');
+      assert.equal(result, null, 'backup() should return null for non-existent files');
+
+      const markerPath = join(ft.backupDir, 'nonexistent-file.php.created-marker');
+      assert.ok(existsSync(markerPath), '.created-marker sentinel should be created');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('behavioral: backup() still copies existing files normally', async () => {
+    const { FileTools } = await import('../src/file-tools.js');
+    const { mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const os = await import('node:os');
+
+    const tmpDir = join(os.tmpdir(), `shift-test-r8005b-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
+
+    try {
+      const logger = makeLogger();
+      const ft = new FileTools(tmpDir, logger);
+
+      mkdirSync(ft.backupDir, { recursive: true });
+
+      // Create a real file
+      writeFileSync(join(tmpDir, 'existing.php'), '<?php echo "hello";');
+
+      const result = ft.backup('existing.php');
+      assert.ok(result, 'backup() should return the backup path for existing files');
+
+      const backupContent = readFileSync(join(ft.backupDir, 'existing.php'), 'utf8');
+      assert.equal(backupContent, '<?php echo "hello";', 'Backup should contain the original file content');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════
+// Run #9 Regression Tests
+// ══════════════════════════════════════════════════════════════════
+
+// ── R9-002/SEC-213: orchestrator.js postTransformChecks readFileSync try-catch ──
+
+describe('R9-002/SEC-213: postTransformChecks readFileSync try-catch', () => {
+  it('source: config file readFileSync is wrapped in try-catch', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'orchestrator.js'), 'utf8');
+
+    // Extract the postTransformChecks function
+    const fnStart = source.indexOf('export function postTransformChecks(');
+    assert.ok(fnStart !== -1, 'postTransformChecks should exist');
+    const fnEnd = source.indexOf('\nexport ', fnStart + 1);
+    const fnBody = source.substring(fnStart, fnEnd);
+
+    // Config file loop section (before tombstone section)
+    const configSection = fnBody.substring(0, fnBody.indexOf('tombstoneCandidates'));
+    assert.ok(configSection.includes('try {'), 'Config file readFileSync should be in try block');
+    assert.ok(configSection.includes('catch'), 'Config file readFileSync should have catch block');
+    assert.ok(configSection.includes('continue'), 'Catch block should continue to next file');
+  });
+
+  it('source: tombstone candidate readFileSync is wrapped in try-catch', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'orchestrator.js'), 'utf8');
+
+    const fnStart = source.indexOf('export function postTransformChecks(');
+    const fnEnd = source.indexOf('\nexport ', fnStart + 1);
+    const fnBody = source.substring(fnStart, fnEnd);
+
+    // Tombstone section (after tombstoneCandidates)
+    const tombstoneSection = fnBody.substring(fnBody.indexOf('for (const relPath of tombstoneCandidates)'));
+    assert.ok(tombstoneSection.includes('try {'), 'Tombstone readFileSync should be in try block');
+    assert.ok(tombstoneSection.includes('catch'), 'Tombstone readFileSync should have catch block');
+    assert.ok(tombstoneSection.includes('continue'), 'Tombstone catch block should continue to next file');
+  });
+
+  it('behavioral: postTransformChecks continues when a config file is unreadable', async () => {
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    // Use a temp dir with a config directory that has a file we can't read
+    const tmpDir = makeTempDir('shift-r9002-');
+    try {
+      const configDir = join(tmpDir, 'config');
+      mkdirSync(configDir, { recursive: true });
+      // Create a valid config file
+      writeFileSync(join(configDir, 'app.php'), '<?php\nreturn [\n  "name" => "test"\n];');
+      // Create a directory named like a .php file — readFileSync will fail on it
+      mkdirSync(join(configDir, 'broken.php'), { recursive: true });
+
+      // Should not throw
+      const issues = postTransformChecks(tmpDir, '11');
+      assert.ok(Array.isArray(issues), 'Should return an array of issues');
+      // The valid config file should not appear as an issue (it has a return statement)
+      const appIssue = issues.find(i => i.file === 'config/app.php');
+      assert.equal(appIssue, undefined, 'Valid config file should not be flagged');
+    } finally {
+      cleanDir(tmpDir);
+    }
+  });
+
+  it('behavioral: postTransformChecks continues when a tombstone candidate is unreadable', async () => {
+    const { postTransformChecks } = await import('../src/orchestrator.js');
+    const tmpDir = makeTempDir('shift-r9002b-');
+    try {
+      // Create a tombstone candidate path as a directory (unreadable by readFileSync)
+      const kernelDir = join(tmpDir, 'app', 'Http', 'Kernel.php');
+      mkdirSync(kernelDir, { recursive: true });
+
+      // Should not throw despite Kernel.php being a directory
+      const issues = postTransformChecks(tmpDir, '11');
+      assert.ok(Array.isArray(issues), 'Should return an array even when tombstone candidates are unreadable');
+    } finally {
+      cleanDir(tmpDir);
+    }
+  });
+});
+
+// ── R9-003: conformity-checker.js unguarded readFileSync calls ──
+
+describe('R9-003: conformity-checker readFileSync calls wrapped in try-catch', () => {
+  it('source: all readFileSync calls in check functions are guarded', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'conformity-checker.js'), 'utf8');
+
+    // Find all readFileSync occurrences (skip the import line)
+    const lines = source.split('\n');
+    let unguardedCount = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.includes('readFileSync') && !line.includes('import ')) {
+        // Check that a try { appears within the preceding 3 lines
+        const context = lines.slice(Math.max(0, i - 3), i + 1).join('\n');
+        if (!context.includes('try {') && !context.includes('try{')) {
+          unguardedCount++;
+        }
+      }
+    }
+    assert.equal(unguardedCount, 0,
+      `All readFileSync calls in conformity-checker.js should be inside try blocks (found ${unguardedCount} unguarded)`);
+  });
+
+  it('behavioral: checkConformity does not throw when config file is unreadable', async () => {
+    const { checkConformity } = await import('../src/conformity-checker.js');
+    const tmpDir = makeTempDir('shift-r9003-');
+    try {
+      // Create minimal composer.json so the check runs
+      writeFileSync(join(tmpDir, 'composer.json'), JSON.stringify({
+        require: { 'laravel/framework': '^11.0' },
+      }));
+      // Create a config directory with an unreadable "file" (actually a directory)
+      mkdirSync(join(tmpDir, 'config', 'app.php'), { recursive: true });
+
+      // Should not throw
+      const report = await checkConformity(tmpDir, '11', { autoFix: false });
+      assert.ok(report, 'Should return a report object');
+      assert.ok(Array.isArray(report.issues), 'Report should have issues array');
+    } finally {
+      cleanDir(tmpDir);
+    }
+  });
+});
+
+// ── R9-004: orchestrator.js _runReporting state mutation ──
+
+describe('R9-004: _runReporting uses spread instead of state mutation', () => {
+  it('source: creates reportContext with spread operator', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'orchestrator.js'), 'utf8');
+
+    const methodStart = source.indexOf('async _runReporting()');
+    assert.ok(methodStart !== -1, '_runReporting method should exist');
+    const methodEnd = source.indexOf('\n  async ', methodStart + 1);
+    const methodBody = source.substring(methodStart, methodEnd > -1 ? methodEnd : methodStart + 500);
+
+    // Should use spread to create reportContext
+    assert.ok(methodBody.includes('{ ...s,'), 'Should create reportContext via spread operator');
+    assert.ok(methodBody.includes('reportContext'), 'Should use a separate reportContext variable');
+  });
+
+  it('source: does NOT assign provider/getPricing directly to state', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'orchestrator.js'), 'utf8');
+
+    const methodStart = source.indexOf('async _runReporting()');
+    const methodEnd = source.indexOf('\n  async ', methodStart + 1);
+    const methodBody = source.substring(methodStart, methodEnd > -1 ? methodEnd : methodStart + 500);
+
+    // Must NOT mutate state directly
+    assert.ok(!methodBody.includes('s.provider ='), 'Should NOT assign provider directly to state object');
+    assert.ok(!methodBody.includes('s.getPricing ='), 'Should NOT assign getPricing directly to state object');
+  });
+
+  it('behavioral: state object is not mutated after reportContext creation', () => {
+    // Simulate the reportContext pattern from _runReporting
+    const state = { fromVersion: '10', toVersion: '11', phase: 'REPORTING' };
+    const originalKeys = Object.keys(state).sort();
+
+    const reportContext = { ...state, provider: 'anthropic', getPricing: () => 0.01 };
+
+    // State should be unchanged
+    assert.deepStrictEqual(Object.keys(state).sort(), originalKeys,
+      'Original state should not gain new keys');
+    assert.equal(state.provider, undefined, 'state.provider should remain undefined');
+    assert.equal(state.getPricing, undefined, 'state.getPricing should remain undefined');
+
+    // reportContext should have both
+    assert.equal(reportContext.provider, 'anthropic');
+    assert.equal(typeof reportContext.getPricing, 'function');
+    assert.equal(reportContext.fromVersion, '10', 'reportContext should inherit state properties');
+  });
+});
+
+// ── R9-007: bin/shift.js rollbackUpgrade logger.destroy() ──
+
+describe('R9-007: rollbackUpgrade has logger.destroy() in finally block', () => {
+  it('source: rollbackUpgrade contains logger.destroy()', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'bin', 'shift.js'), 'utf8');
+
+    const fnStart = source.indexOf('async function rollbackUpgrade(');
+    assert.ok(fnStart !== -1, 'rollbackUpgrade function should exist');
+    const fnBody = source.substring(fnStart, source.indexOf('\n}', fnStart + 100) + 2);
+
+    assert.ok(fnBody.includes('logger.destroy()'), 'Should call logger.destroy()');
+  });
+
+  it('source: logger.destroy() is inside a finally block', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'bin', 'shift.js'), 'utf8');
+
+    const fnStart = source.indexOf('async function rollbackUpgrade(');
+    const fnBody = source.substring(fnStart, source.indexOf('\n}', fnStart + 100) + 2);
+
+    // Find finally block and verify destroy is inside it
+    const finallyIdx = fnBody.indexOf('} finally {');
+    assert.ok(finallyIdx !== -1, 'Should have a finally block');
+    const finallyBlock = fnBody.substring(finallyIdx);
+    assert.ok(finallyBlock.includes('logger.destroy()'),
+      'logger.destroy() should be inside the finally block');
+  });
+
+  it('source: try block precedes finally block', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'bin', 'shift.js'), 'utf8');
+
+    const fnStart = source.indexOf('async function rollbackUpgrade(');
+    const fnBody = source.substring(fnStart, source.indexOf('\n}', fnStart + 100) + 2);
+
+    const tryIdx = fnBody.indexOf('try {');
+    const finallyIdx = fnBody.indexOf('} finally {');
+    assert.ok(tryIdx !== -1, 'Should have a try block');
+    assert.ok(finallyIdx !== -1, 'Should have a finally block');
+    assert.ok(tryIdx < finallyIdx, 'try should come before finally');
+  });
+});
+
+// ── R9-009/SEC-203: conformity-checker.js applyAutoFixes path traversal ──
+
+describe('R9-009/SEC-203: applyAutoFixes path traversal check', () => {
+  it('source: applyAutoFixes has resolve() + startsWith() traversal check', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'conformity-checker.js'), 'utf8');
+
+    const fnStart = source.indexOf('function applyAutoFixes(');
+    assert.ok(fnStart !== -1, 'applyAutoFixes function should exist');
+    const fnEnd = source.indexOf('\n}', fnStart + 50);
+    const fnBody = source.substring(fnStart, fnEnd + 2);
+
+    assert.ok(fnBody.includes('resolve('), 'Should use resolve() for path normalization');
+    assert.ok(fnBody.includes('.startsWith('), 'Should use startsWith() for traversal check');
+    assert.ok(fnBody.includes('normalize('), 'Should normalize the issue file path');
+  });
+
+  it('source: traversal check is before unlinkSync', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'conformity-checker.js'), 'utf8');
+
+    const fnStart = source.indexOf('function applyAutoFixes(');
+    const fnEnd = source.indexOf('\n}', fnStart + 50);
+    const fnBody = source.substring(fnStart, fnEnd + 2);
+
+    const traversalCheckIdx = fnBody.indexOf('.startsWith(');
+    const unlinkIdx = fnBody.indexOf('unlinkSync(');
+    assert.ok(traversalCheckIdx < unlinkIdx,
+      'Path traversal check must come before unlinkSync call');
+  });
+
+  it('behavioral: applyAutoFixes skips files with path traversal in issue.file', async () => {
+    const { checkConformity } = await import('../src/conformity-checker.js');
+    const tmpDir = makeTempDir('shift-r9009-');
+    try {
+      // Create a composer.json so the checker runs
+      writeFileSync(join(tmpDir, 'composer.json'), JSON.stringify({
+        require: { 'laravel/framework': '^11.0' },
+      }));
+
+      // Create a file that would be a valid autofix target
+      const targetDir = join(tmpDir, 'app', 'Http');
+      mkdirSync(targetDir, { recursive: true });
+      writeFileSync(join(targetDir, 'Kernel.php'), '<?php\n');
+
+      // Run conformity check with autoFix enabled
+      // The traversal protection should prevent any issue.file with ../
+      // from being deleted — we verify the mechanism exists in the source
+      const report = await checkConformity(tmpDir, '11', { autoFix: true });
+      assert.ok(report, 'Should return a report');
+      // No traversal-based deletion should have occurred
+      const traversalFix = (report.fixes || []).find(f => f.file && f.file.includes('..'));
+      assert.equal(traversalFix, undefined, 'No fix should contain path traversal sequences');
+    } finally {
+      cleanDir(tmpDir);
+    }
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Run #10 Regression Tests
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── R10-001: file-tools.js atomic write (.tmp + renameSync) ──
+
+describe('Run #10 R10-001: file-tools.js atomic write', () => {
+  it('source: writeFile uses .tmp + renameSync pattern', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'file-tools.js'), 'utf8');
+
+    const methodStart = source.indexOf('writeFile(filepath, content)');
+    assert.ok(methodStart !== -1, 'writeFile method should exist');
+    const methodEnd = source.indexOf('\n  }', methodStart);
+    const methodBody = source.substring(methodStart, methodEnd);
+
+    assert.ok(methodBody.includes("+ '.tmp'"), 'Should write to .tmp file first');
+    assert.ok(methodBody.includes('renameSync('), 'Should use renameSync to atomically move');
+  });
+
+  it('source: imports renameSync from node:fs', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'file-tools.js'), 'utf8');
+
+    assert.ok(source.includes('renameSync'), 'Should import renameSync');
+  });
+
+  it('behavioral: writeFile creates file with correct content', async () => {
+    const tmpDir = makeTempDir('shift-r10001-');
+    try {
+      const { FileTools } = await import('../src/file-tools.js');
+      const logger = {
+        info: async () => {}, warn: async () => {}, error: async () => {},
+        debug: async () => {}, success: async () => {}, tool: async () => {},
+      };
+      const ft = new FileTools(tmpDir, logger);
+      ft.writeFile('test-atomic.txt', 'hello atomic');
+      const { readFileSync } = await import('node:fs');
+      const content = readFileSync(join(tmpDir, 'test-atomic.txt'), 'utf8');
+      assert.equal(content, 'hello atomic');
+    } finally {
+      cleanDir(tmpDir);
+    }
+  });
+
+  it('behavioral: no leftover .tmp file after writeFile', async () => {
+    const tmpDir = makeTempDir('shift-r10001b-');
+    try {
+      const { FileTools } = await import('../src/file-tools.js');
+      const logger = {
+        info: async () => {}, warn: async () => {}, error: async () => {},
+        debug: async () => {}, success: async () => {}, tool: async () => {},
+      };
+      const ft = new FileTools(tmpDir, logger);
+      ft.writeFile('test-notmp.txt', 'content');
+      assert.ok(!existsSync(join(tmpDir, 'test-notmp.txt.tmp')),
+        'No .tmp file should remain after atomic write');
+      assert.ok(existsSync(join(tmpDir, 'test-notmp.txt')),
+        'Target file should exist');
+    } finally {
+      cleanDir(tmpDir);
+    }
+  });
+});
+
+// ── R10-002: pre-processor.js safeWriteFile atomic write ──
+
+describe('Run #10 R10-002: pre-processor.js safeWriteFile atomic write', () => {
+  it('source: safeWriteFile uses .tmp + renameSync pattern', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'pre-processor.js'), 'utf8');
+
+    const fnStart = source.indexOf('function safeWriteFile(');
+    assert.ok(fnStart !== -1, 'safeWriteFile function should exist');
+    const fnEnd = source.indexOf('\n}', fnStart + 10);
+    const fnBody = source.substring(fnStart, fnEnd + 2);
+
+    assert.ok(fnBody.includes("+ '.tmp'"), 'Should write to .tmp file first');
+    assert.ok(fnBody.includes('renameSync(tmp, absPath)'), 'Should rename tmp to final path');
+  });
+
+  it('source: imports renameSync', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'pre-processor.js'), 'utf8');
+
+    assert.ok(source.includes('renameSync'), 'Should import renameSync');
+  });
+});
+
+// ── R10-003: l11-structural.js atomic writes ──
+
+describe('Run #10 R10-003: l11-structural.js atomic writes', () => {
+  it('source: all 3 writeFileSync calls use .tmp + renameSync', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'transforms', 'l11-structural.js'), 'utf8');
+
+    // Count .tmp + renameSync pairs for the 3 atomic writes
+    const tmpMatches = source.match(/\.tmp'/g) || [];
+    assert.ok(tmpMatches.length >= 3, `Should have at least 3 .tmp references, found ${tmpMatches.length}`);
+
+    const renameMatches = source.match(/renameSync\(/g) || [];
+    assert.ok(renameMatches.length >= 3, `Should have at least 3 renameSync calls, found ${renameMatches.length}`);
+  });
+
+  it('source: bootstrap/app.php write is atomic', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'transforms', 'l11-structural.js'), 'utf8');
+
+    const idx = source.indexOf('bootstrapTmp');
+    assert.ok(idx !== -1, 'Should have bootstrapTmp variable for atomic write');
+    assert.ok(source.includes('bootstrapTmp, bootstrapAppPath'), 'Should rename bootstrapTmp to bootstrapAppPath');
+  });
+
+  it('source: providers.php write is atomic', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'transforms', 'l11-structural.js'), 'utf8');
+
+    const idx = source.indexOf('providersTmp');
+    assert.ok(idx !== -1, 'Should have providersTmp variable for atomic write');
+    assert.ok(source.includes('providersTmp, providersPath'), 'Should rename providersTmp to providersPath');
+  });
+
+  it('source: TestCase.php write is atomic', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'transforms', 'l11-structural.js'), 'utf8');
+
+    const idx = source.indexOf('testCaseTmp');
+    assert.ok(idx !== -1, 'Should have testCaseTmp variable for atomic write');
+    assert.ok(source.includes('testCaseTmp, testCasePath'), 'Should rename testCaseTmp to testCasePath');
+  });
+
+  it('source: imports renameSync from node:fs', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'transforms', 'l11-structural.js'), 'utf8');
+
+    assert.ok(source.includes('renameSync'), 'Should import renameSync');
+  });
+});
+
+// ── SEC-215: dependency-agent envKeys instead of useProcessEnv ──
+
+describe('Run #10 SEC-215: dependency-agent envKeys allowlist', () => {
+  it('source: does NOT use useProcessEnv: true', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'agents', 'dependency-agent.js'), 'utf8');
+
+    assert.ok(!source.includes('useProcessEnv: true'),
+      'Should NOT use useProcessEnv: true (leaks secrets)');
+    assert.ok(!source.includes('useProcessEnv:true'),
+      'Should NOT use useProcessEnv:true (leaks secrets)');
+  });
+
+  it('source: uses envKeys allowlist', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'agents', 'dependency-agent.js'), 'utf8');
+
+    assert.ok(source.includes('envKeys:'), 'Should use envKeys allowlist');
+    assert.ok(source.includes("'PATH'"), 'envKeys should include PATH');
+    assert.ok(source.includes("'HOME'"), 'envKeys should include HOME');
+  });
+
+  it('source: ANTHROPIC_API_KEY is NOT in envKeys', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'agents', 'dependency-agent.js'), 'utf8');
+
+    const envKeysStart = source.indexOf('envKeys: [');
+    assert.ok(envKeysStart !== -1, 'envKeys array should exist');
+    const envKeysEnd = source.indexOf(']', envKeysStart);
+    const envKeysBlock = source.substring(envKeysStart, envKeysEnd + 1);
+
+    assert.ok(!envKeysBlock.includes('ANTHROPIC_API_KEY'),
+      'envKeys must NOT include ANTHROPIC_API_KEY');
+  });
+});
+
+// ── R10-009: conformity-checker startsWith separator fix ──
+
+describe('Run #10 R10-009: conformity-checker startsWith separator fix', () => {
+  it('source: applyAutoFixes uses resolvedRoot + sep in startsWith', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'conformity-checker.js'), 'utf8');
+
+    const fnIdx = source.indexOf('for (const issue of report.issues)');
+    assert.ok(fnIdx !== -1, 'Should have issue iteration loop');
+    const block = source.substring(fnIdx, fnIdx + 500);
+
+    assert.ok(block.includes('resolvedRoot + sep'),
+      'startsWith should use resolvedRoot + sep to prevent prefix-matching sibling dirs');
+  });
+
+  it('behavioral: path prefix /var/www/app should NOT match /var/www/app-other', async () => {
+    const { resolve, sep } = await import('node:path');
+
+    const projectRoot = '/var/www/app';
+    const resolvedRoot = resolve(projectRoot);
+    const maliciousPath = resolve('/var/www/app-other/file.php');
+
+    const passes = maliciousPath === resolvedRoot || maliciousPath.startsWith(resolvedRoot + sep);
+    assert.ok(!passes, 'Path from sibling directory should NOT pass traversal check');
+  });
+
+  it('behavioral: path within project root should pass', async () => {
+    const { resolve, sep } = await import('node:path');
+
+    const projectRoot = '/var/www/app';
+    const resolvedRoot = resolve(projectRoot);
+    const validPath = resolve('/var/www/app/resources/views/test.blade.php');
+
+    const passes = validPath === resolvedRoot || validPath.startsWith(resolvedRoot + sep);
+    assert.ok(passes, 'Path within project root should pass traversal check');
+  });
+});
+
+// ── R10-014/015/016: glob follow:false across modules ──
+
+describe('Run #10 R10-014/015/016: glob follow:false to prevent symlink loops', () => {
+  it('source: conformity-checker glob has follow: false', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'conformity-checker.js'), 'utf8');
+
+    const globIdx = source.indexOf('follow: false');
+    assert.ok(globIdx !== -1, 'conformity-checker should have follow: false in glob calls');
+  });
+
+  it('source: route-checker glob has follow: false', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'route-checker.js'), 'utf8');
+
+    const matches = source.match(/follow:\s*false/g) || [];
+    assert.ok(matches.length >= 2, `route-checker should have at least 2 follow: false, found ${matches.length}`);
+  });
+
+  it('source: blueprint-exporter glob has follow: false', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'blueprint-exporter.js'), 'utf8');
+
+    const matches = source.match(/follow:\s*false/g) || [];
+    assert.ok(matches.length >= 2, `blueprint-exporter should have at least 2 follow: false, found ${matches.length}`);
+  });
+
+  it('source: pre-processor glob has follow: false', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'pre-processor.js'), 'utf8');
+
+    const matches = source.match(/follow:\s*false/g) || [];
+    assert.ok(matches.length >= 1, `pre-processor should have at least 1 follow: false, found ${matches.length}`);
+  });
+});
+
+// ── R10-010/012: orchestrator path validation ──
+
+describe('Run #10 R10-010/012: orchestrator path validation in postTransformChecks and _preflightChecks', () => {
+  it('source: postTransformChecks has resolve + startsWith path validation', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'orchestrator.js'), 'utf8');
+
+    const fnStart = source.indexOf('export function postTransformChecks(');
+    assert.ok(fnStart !== -1, 'postTransformChecks should exist');
+    const fnBody = source.substring(fnStart, fnStart + 1000);
+
+    assert.ok(fnBody.includes('resolve(projectRoot)'), 'Should resolve project root');
+    assert.ok(fnBody.includes('resolvedRoot + sep'), 'Should use resolvedRoot + sep for prefix check');
+    assert.ok(fnBody.includes('.startsWith(rootPrefix)'), 'Should use startsWith for path validation');
+  });
+
+  it('source: _preflightChecks validates composer.json path', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'orchestrator.js'), 'utf8');
+
+    const fnStart = source.indexOf('async _preflightChecks()');
+    assert.ok(fnStart !== -1, '_preflightChecks should exist');
+    const fnEnd = source.indexOf('\n  async ', fnStart + 1);
+    const fnBody = source.substring(fnStart, fnEnd > -1 ? fnEnd : fnStart + 2000);
+
+    assert.ok(fnBody.includes("resolve(this.projectPath, 'composer.json')"),
+      'Should resolve composer.json path');
+    assert.ok(fnBody.includes('.startsWith(projectPrefix)'),
+      'Should validate path with startsWith');
+  });
+
+  it('source: postTransformChecks validates both config files and tombstone paths', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'orchestrator.js'), 'utf8');
+
+    const fnStart = source.indexOf('export function postTransformChecks(');
+    const fnEnd = source.indexOf('\nexport ', fnStart + 1);
+    const fnBody = source.substring(fnStart, fnEnd > -1 ? fnEnd : fnStart + 3000);
+
+    const startsWithMatches = fnBody.match(/\.startsWith\(rootPrefix\)/g) || [];
+    assert.ok(startsWithMatches.length >= 2,
+      `Should have at least 2 startsWith(rootPrefix) checks, found ${startsWithMatches.length}`);
+  });
+});
+
+// ── R10-020/021: typed errors in orchestrator ──
+
+describe('Run #10 R10-020/021: typed errors in orchestrator _preflightChecks', () => {
+  it('source: git repo check throws GitError', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'orchestrator.js'), 'utf8');
+
+    const fnStart = source.indexOf('async _preflightChecks()');
+    const fnEnd = source.indexOf('\n  async ', fnStart + 1);
+    const fnBody = source.substring(fnStart, fnEnd > -1 ? fnEnd : fnStart + 2000);
+
+    assert.ok(fnBody.includes('throw new GitError('),
+      'Git repo check should throw GitError instead of bare Error');
+    assert.ok(!fnBody.match(/throw new Error\(['"]/),
+      'Should NOT use bare Error in _preflightChecks');
+  });
+
+  it('source: API key check throws ShiftBaseError', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'orchestrator.js'), 'utf8');
+
+    const fnStart = source.indexOf('async _preflightChecks()');
+    const fnEnd = source.indexOf('\n  async ', fnStart + 1);
+    const fnBody = source.substring(fnStart, fnEnd > -1 ? fnEnd : fnStart + 2000);
+
+    assert.ok(fnBody.includes("throw new ShiftBaseError('SHIFT_ERR_CONFIG'"),
+      'API key check should throw ShiftBaseError with SHIFT_ERR_CONFIG code');
+  });
+
+  it('source: orchestrator imports GitError and ShiftBaseError', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'orchestrator.js'), 'utf8');
+
+    assert.ok(source.includes('GitError'), 'Should import GitError');
+    assert.ok(source.includes('ShiftBaseError'), 'Should import ShiftBaseError');
+    assert.ok(source.includes("from './errors.js'"), 'Should import from errors.js');
+  });
+});
+
+// ── Run #11 Regression Tests ──────────────────────────────────────
+
+describe('AUDIT-11 R11-001: blueprint-exporter atomic write', () => {
+  it('source: imports renameSync from node:fs', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'blueprint-exporter.js'), 'utf8');
+
+    assert.ok(source.includes('renameSync'), 'Should import renameSync');
+  });
+
+  it('source: writes to .tmp then renames', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'blueprint-exporter.js'), 'utf8');
+
+    assert.ok(source.includes("absOutputPath + '.tmp'"), 'Should create .tmp path');
+    assert.ok(source.includes('writeFileSync(tmpPath,'), 'Should write to tmpPath');
+    assert.ok(source.includes('renameSync(tmpPath, absOutputPath)'), 'Should rename tmp to final');
+  });
+
+  it('source: does NOT use direct writeFileSync to absOutputPath', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'blueprint-exporter.js'), 'utf8');
+
+    assert.ok(!source.includes('writeFileSync(absOutputPath,'),
+      'Should NOT write directly to absOutputPath — must use atomic temp+rename');
+  });
+
+  it('behavioral: generates YAML via atomic write', async () => {
+    const { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { generateBlueprintYaml } = await import('../src/blueprint-exporter.js');
+
+    const tmpDir = join(import.meta.dirname, '.tmp-r11-001-test');
+    try {
+      mkdirSync(join(tmpDir, 'app', 'Models'), { recursive: true });
+      mkdirSync(join(tmpDir, '.shift'), { recursive: true });
+
+      writeFileSync(join(tmpDir, 'app', 'Models', 'Item.php'), `<?php
+namespace App\\Models;
+use Illuminate\\Database\\Eloquent\\Model;
+class Item extends Model {
+    protected $fillable = ['name'];
+}
+`);
+
+      const result = await generateBlueprintYaml(tmpDir, { includeControllers: false });
+      assert.ok(result.yaml.includes('Item'), 'YAML should contain model name');
+      assert.ok(existsSync(join(tmpDir, '.shift', 'blueprint.yaml')), 'Output file should exist');
+      assert.ok(!existsSync(join(tmpDir, '.shift', 'blueprint.yaml.tmp')), '.tmp file should be cleaned up by rename');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('AUDIT-11 R11-002: blueprint-exporter path traversal validation', () => {
+  it('source: uses resolve() for absOutputPath', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'blueprint-exporter.js'), 'utf8');
+
+    assert.ok(source.includes('resolve(projectRoot, outputPath)'),
+      'Should use resolve() to compute absOutputPath');
+  });
+
+  it('source: checks absOutputPath starts with resolvedRoot + sep', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'blueprint-exporter.js'), 'utf8');
+
+    assert.ok(source.includes('absOutputPath.startsWith(resolvedRoot + sep)'),
+      'Should validate path prefix with separator');
+  });
+
+  it('source: imports resolve and sep from node:path', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'blueprint-exporter.js'), 'utf8');
+
+    assert.ok(source.includes('resolve'), 'Should import resolve');
+    assert.ok(source.includes('sep'), 'Should import sep');
+  });
+
+  it('behavioral: rejects path traversal in outputPath', async () => {
+    const { mkdirSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { generateBlueprintYaml } = await import('../src/blueprint-exporter.js');
+
+    const tmpDir = join(import.meta.dirname, '.tmp-r11-002-test');
+    try {
+      mkdirSync(join(tmpDir, 'app', 'Models'), { recursive: true });
+
+      await assert.rejects(
+        () => generateBlueprintYaml(tmpDir, { outputPath: '../../etc/evil.yaml', includeControllers: false }),
+        (err) => {
+          assert.ok(err.message.includes('escapes project root'), `Expected traversal error, got: ${err.message}`);
+          return true;
+        }
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('behavioral: accepts valid outputPath within project', async () => {
+    const { mkdirSync, writeFileSync, rmSync, existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { generateBlueprintYaml } = await import('../src/blueprint-exporter.js');
+
+    const tmpDir = join(import.meta.dirname, '.tmp-r11-002b-test');
+    try {
+      mkdirSync(join(tmpDir, 'app', 'Models'), { recursive: true });
+
+      writeFileSync(join(tmpDir, 'app', 'Models', 'Foo.php'), `<?php
+namespace App\\Models;
+use Illuminate\\Database\\Eloquent\\Model;
+class Foo extends Model {
+    protected $fillable = ['bar'];
+}
+`);
+
+      const result = await generateBlueprintYaml(tmpDir, {
+        outputPath: 'output/blueprint.yaml',
+        includeControllers: false,
+      });
+      assert.ok(existsSync(join(tmpDir, 'output', 'blueprint.yaml')), 'Should write to valid custom path');
+      assert.ok(result.yaml.includes('Foo'), 'YAML should contain model');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 });

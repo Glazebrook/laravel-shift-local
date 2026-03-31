@@ -5,8 +5,8 @@
  * compatible with laravel-shift/blueprint for code generation.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'node:fs';
+import { join, dirname, resolve, sep } from 'node:path';
 import { glob } from 'glob';
 
 /**
@@ -37,11 +37,18 @@ export async function generateBlueprintYaml(projectRoot, options = {}) {
   // Generate YAML
   const yaml = buildYaml(models, controllers);
 
-  // Write to file
-  const absOutputPath = join(projectRoot, outputPath);
+  // Write to file (R11-002: validate path stays within project root)
+  const absOutputPath = resolve(projectRoot, outputPath);
+  const resolvedRoot = resolve(projectRoot);
+  if (absOutputPath !== resolvedRoot && !absOutputPath.startsWith(resolvedRoot + sep)) {
+    throw new Error(`Blueprint output path escapes project root: ${outputPath}`);
+  }
   const outputDir = dirname(absOutputPath);
   if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
-  writeFileSync(absOutputPath, yaml, 'utf8');
+  // R11-001: atomic write (temp + rename)
+  const tmpPath = absOutputPath + '.tmp';
+  writeFileSync(tmpPath, yaml, 'utf8');
+  renameSync(tmpPath, absOutputPath);
 
   return {
     yaml,
@@ -55,10 +62,12 @@ export async function generateBlueprintYaml(projectRoot, options = {}) {
  * Parse Eloquent models from app/Models/*.php
  */
 async function parseModels(projectRoot) {
+  // R10-015 FIX: Add follow: false to prevent following symlinks into loops
   const modelFiles = await glob('app/Models/**/*.php', {
     cwd: projectRoot,
     nodir: true,
     ignore: ['vendor/**'],
+    follow: false,
   });
 
   const models = [];
@@ -168,10 +177,12 @@ function mapCastToBlueprint(castType) {
  * Parse controllers from app/Http/Controllers/*.php
  */
 async function parseControllers(projectRoot) {
+  // R10-015 FIX: Add follow: false to prevent following symlinks into loops
   const controllerFiles = await glob('app/Http/Controllers/**/*.php', {
     cwd: projectRoot,
     nodir: true,
     ignore: ['vendor/**'],
+    follow: false,
   });
 
   const controllers = [];

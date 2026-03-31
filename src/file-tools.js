@@ -5,13 +5,14 @@
 import {
   readFileSync, writeFileSync, copyFileSync,
   existsSync, mkdirSync, readdirSync, statSync,
-  unlinkSync, realpathSync,
+  unlinkSync, realpathSync, renameSync,
 } from 'node:fs';
 import { join, dirname, relative, resolve, sep, normalize, basename } from 'node:path';
 import { glob } from 'glob';
 // MED-3 FIX: Use crypto for stronger boundary randomness
 import { randomUUID } from 'node:crypto';
 import { FileToolsError, ParseError, PathTraversalError } from './errors.js';
+export { createSafeEnv } from './shell.js';
 
 export class FileTools {
   constructor(projectPath, logger, excludeConfig = {}) {
@@ -42,7 +43,10 @@ export class FileTools {
   writeFile(filepath, content) {
     const abs = this._abs(filepath);
     mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, content, 'utf8');
+    // R10-001 FIX: Atomic write — write to temp then rename to prevent partial writes on crash
+    const tmp = abs + '.tmp';
+    writeFileSync(tmp, content, 'utf8');
+    renameSync(tmp, abs);
   }
 
   writeJson(filepath, obj, pretty = true) {
@@ -66,7 +70,12 @@ export class FileTools {
       // marker so the backup guard knows the pristine state was "no file".
       // This prevents the first transform's output being treated as the
       // pristine original if the file is later modified in a subsequent step.
-      writeFileSync(backupPath + '.created-marker', '', 'utf8');
+      const markerPath = backupPath + '.created-marker';
+      const resolvedMarker = resolve(markerPath);
+      if (!resolvedMarker.startsWith(backupPrefix)) {
+        throw new PathTraversalError(`Backup marker path traversal blocked: ${filepath}`, { requestedPath: filepath, resolvedPath: resolvedMarker });
+      }
+      writeFileSync(markerPath, '', 'utf8');
       return null;
     }
     copyFileSync(abs, backupPath);

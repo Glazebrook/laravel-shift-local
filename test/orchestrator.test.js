@@ -742,7 +742,7 @@ describe('E2E-2: Bootstrap cache clearing (validator)', () => {
       config: {},
     });
 
-    agent._clearBootstrapCache();
+    await agent._clearBootstrapCache();
 
     // .php files should be removed
     assert.ok(!existsSync(join(cacheDir, 'packages.php')));
@@ -765,7 +765,7 @@ describe('E2E-2: Bootstrap cache clearing (validator)', () => {
     });
 
     // Should not throw when directory doesn't exist
-    agent._clearBootstrapCache();
+    await agent._clearBootstrapCache();
     assert.ok(!existsSync(join(tempDir, 'bootstrap', 'cache')));
   });
 

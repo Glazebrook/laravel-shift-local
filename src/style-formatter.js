@@ -170,10 +170,12 @@ async function runFormatter(detected, projectRoot, options = {}) {
     await logger.info('StyleFormatter', `Running: ${detected.binary} ${args.join(' ')}`);
   }
 
+  // R10-007 FIX: Use envKeys allowlist instead of useProcessEnv to avoid leaking secrets.
+  // PHP formatters need PHP_INI_SCAN_DIR, COMPOSER_HOME, and APP_ENV; the rest are in BASE_ENV_KEYS.
   const result = await execCommand('php', [detected.binary, ...args], {
     cwd: projectRoot,
     timeout: 120_000,
-    useProcessEnv: true,
+    envKeys: ['PHP_INI_SCAN_DIR', 'COMPOSER_HOME', 'APP_ENV'],
   });
 
   // Parse output to count changed files

@@ -11,7 +11,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, unlinkSync, mkdirSync, copyFileSync } from 'node:fs';
-import { join, dirname, basename } from 'node:path';
+import { join, dirname, basename, resolve, normalize, sep } from 'node:path';
 import { glob } from 'glob';
 
 /**
@@ -269,7 +269,12 @@ function checkConfigConformity(projectRoot, version, report) {
       const filePath = join(projectRoot, configFile);
       if (!existsSync(filePath)) continue;
 
-      const content = readFileSync(filePath, 'utf-8');
+      let content;
+      try {
+        content = readFileSync(filePath, 'utf-8');
+      } catch {
+        continue;
+      }
 
       if (checks.shouldNotContain) {
         for (const check of checks.shouldNotContain) {
@@ -299,7 +304,12 @@ function checkMiddlewareConformity(projectRoot, version, report) {
   const bootstrapApp = join(projectRoot, 'bootstrap', 'app.php');
   if (!existsSync(bootstrapApp)) return;
 
-  const content = readFileSync(bootstrapApp, 'utf-8');
+  let content;
+  try {
+    content = readFileSync(bootstrapApp, 'utf-8');
+  } catch {
+    return;
+  }
 
   if (!content.includes('withMiddleware')) {
     report.issues.push({
@@ -347,7 +357,12 @@ function checkProviderConformity(projectRoot, version, report) {
 
   const configApp = join(projectRoot, 'config', 'app.php');
   if (existsSync(configApp)) {
-    const configContent = readFileSync(configApp, 'utf-8');
+    let configContent;
+    try {
+      configContent = readFileSync(configApp, 'utf-8');
+    } catch {
+      return;
+    }
     if (/['"]providers['"]\s*=>\s*\[/.test(configContent)) {
       report.issues.push({
         category: 'providers',
@@ -371,7 +386,12 @@ function checkRoutingConformity(projectRoot, version, report) {
   const bootstrapApp = join(projectRoot, 'bootstrap', 'app.php');
 
   if (existsSync(apiRoutes) && existsSync(bootstrapApp)) {
-    const bootstrapContent = readFileSync(bootstrapApp, 'utf-8');
+    let bootstrapContent;
+    try {
+      bootstrapContent = readFileSync(bootstrapApp, 'utf-8');
+    } catch {
+      return;
+    }
     if (!bootstrapContent.includes('api.php') && !bootstrapContent.includes('withRouting')) {
       report.issues.push({
         category: 'routing',
@@ -393,8 +413,13 @@ function checkTestConformity(projectRoot, version, report) {
 
   const testCase = join(projectRoot, 'tests', 'TestCase.php');
   if (existsSync(testCase)) {
-    const content = readFileSync(testCase, 'utf-8');
-    if (content.includes('CreatesApplication')) {
+    let content;
+    try {
+      content = readFileSync(testCase, 'utf-8');
+    } catch {
+      // Unreadable — skip check
+    }
+    if (content && content.includes('CreatesApplication')) {
       report.issues.push({
         category: 'tests',
         severity: 'low',
@@ -409,8 +434,13 @@ function checkTestConformity(projectRoot, version, report) {
 
   const phpunitXml = join(projectRoot, 'phpunit.xml');
   if (existsSync(phpunitXml)) {
-    const content = readFileSync(phpunitXml, 'utf-8');
-    if (content.includes('phpunit') && !content.includes('cacheDirectory')) {
+    let phpunitContent;
+    try {
+      phpunitContent = readFileSync(phpunitXml, 'utf-8');
+    } catch {
+      // Unreadable — skip check
+    }
+    if (phpunitContent && phpunitContent.includes('phpunit') && !phpunitContent.includes('cacheDirectory')) {
       report.issues.push({
         category: 'tests',
         severity: 'low',
@@ -447,7 +477,8 @@ async function checkDeprecatedPatterns(projectRoot, version, report) {
 
     let files;
     try {
-      files = await glob(check.globPattern, { cwd: projectRoot, nodir: true });
+      // R10-014 FIX: Add follow: false to prevent following symlinks into loops
+      files = await glob(check.globPattern, { cwd: projectRoot, nodir: true, follow: false });
     } catch {
       continue;
     }
@@ -478,6 +509,14 @@ async function checkDeprecatedPatterns(projectRoot, version, report) {
 function applyAutoFixes(projectRoot, report) {
   for (const issue of report.issues) {
     if (!issue.autoFixable || issue.fix !== 'delete') continue;
+
+    // R10-009 FIX: Path traversal validation — append separator to prevent
+    // /var/www/app matching /var/www/app-other
+    const resolved = resolve(projectRoot, normalize(issue.file));
+    const resolvedRoot = resolve(projectRoot);
+    if (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + sep)) {
+      continue;
+    }
 
     const filePath = join(projectRoot, issue.file);
     if (!existsSync(filePath)) continue;
