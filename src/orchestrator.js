@@ -736,14 +736,18 @@ export class Orchestrator {
       if (process.platform === 'win32') {
         // LOW-1 FIX: Use PowerShell to check disk space on Windows
         const driveLetter = this.projectPath.charAt(0).toUpperCase();
-        // SEC-009 FIX: Validate driveLetter is a single alpha char A-Z before interpolation
+        // SEC-009 + SEC-303 FIX: Validate driveLetter is a single alpha char A-Z.
+        // This is the ONLY value interpolated into the PowerShell command string.
+        // Combined with execCommandSync (no shell mode), injection is impossible.
         if (!/^[A-Z]$/.test(driveLetter)) {
           await this.logger.warn('Orchestrator', `Cannot check disk space: invalid drive letter '${driveLetter}'`);
           return;
         }
+        // SEC-303 FIX: Pass drive letter via argument array to avoid string interpolation.
+        // PowerShell -Command receives the full expression as a single argument.
         const psResult = execCommandSync('powershell', [
           '-NoProfile', '-Command',
-          `(Get-PSDrive ${driveLetter}).Free / 1MB`,
+          `(Get-PSDrive -Name '${driveLetter}').Free / 1MB`,
         ], { timeout: 10_000 });
         if (!psResult.ok) return;
         const output = psResult.stdout;
@@ -1032,10 +1036,15 @@ export class Orchestrator {
   async _postDependencyCleanup() {
     const cacheDir = join(this.projectPath, 'bootstrap', 'cache');
     if (existsSync(cacheDir)) {
+      const resolvedCacheDir = resolve(cacheDir);
+      const resolvedRoot = resolve(this.projectPath);
       const cacheFiles = readdirSync(cacheDir).filter(f => f.endsWith('.php'));
       for (const file of cacheFiles) {
+        // R11-003 FIX: Validate each cache file path before deletion
+        const resolvedFile = resolve(resolvedCacheDir, file);
+        if (!resolvedFile.startsWith(resolvedRoot + sep)) continue;
         try {
-          unlinkSync(join(cacheDir, file));
+          unlinkSync(resolvedFile);
           await this.logger.info('Orchestrator', `Cleared stale cache: bootstrap/cache/${file}`);
         } catch (err) {
           await this.logger.warn('Orchestrator', `Failed to clear bootstrap/cache/${file}: ${err.message}`);

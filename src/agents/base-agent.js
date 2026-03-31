@@ -11,7 +11,7 @@
  *  - Rate limiting awareness (M9 FIX)
  */
 
-import Anthropic from '@anthropic-ai/sdk';
+import { createRequire } from 'node:module';
 import { ShiftBaseError } from '../errors.js';
 // L1 FIX: Use shared sleep utility instead of duplicating
 import { sleep } from '../utils.js';
@@ -39,8 +39,12 @@ export class AgentError extends ShiftBaseError {
  * FIX #19: _resetSharedClient() allows tests to inject a mock client.
  */
 let _sharedClient = null;
+// R11-004 FIX: Lazy-import Anthropic SDK only when actually creating a client,
+// so there is no module-level dependency on @anthropic-ai/sdk.
+const require = createRequire(import.meta.url);
 function getSharedClient() {
   if (!_sharedClient) {
+    const Anthropic = require('@anthropic-ai/sdk').default;
     _sharedClient = new Anthropic(); // reads ANTHROPIC_API_KEY from env
   }
   return _sharedClient;

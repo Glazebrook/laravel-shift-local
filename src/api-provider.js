@@ -119,8 +119,14 @@ export function createApiClient(config = {}) {
   let client;
   if (provider === 'bedrock') {
     // R7-005 FIX: Only set AWS_PROFILE if not already set, to avoid
-    // clobbering an existing value from the user's shell environment
+    // clobbering an existing value from the user's shell environment.
+    // SEC-301 FIX: Validate profile name matches AWS allowed characters
+    // (alphanumeric, dash, underscore, period, forward slash) before setting.
     if (bedrockOpts.profile && !process.env.AWS_PROFILE) {
+      if (!/^[a-zA-Z0-9_.\-/]+$/.test(bedrockOpts.profile)) {
+        throw new Error(`Invalid bedrock.profile value in .shiftrc: '${bedrockOpts.profile}'. ` +
+          'AWS profile names may only contain alphanumeric characters, dashes, underscores, periods, and forward slashes.');
+      }
       process.env.AWS_PROFILE = bedrockOpts.profile;
     }
     const opts = {};

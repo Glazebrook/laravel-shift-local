@@ -483,9 +483,13 @@ async function checkDeprecatedPatterns(projectRoot, version, report) {
       continue;
     }
 
+    const resolvedRoot = resolve(projectRoot);
     for (const file of files) {
+      // R11-005 FIX: Validate glob result path before reading
+      const resolvedFile = resolve(projectRoot, file);
+      if (!resolvedFile.startsWith(resolvedRoot + sep)) continue;
       try {
-        const content = readFileSync(join(projectRoot, file), 'utf-8');
+        const content = readFileSync(resolvedFile, 'utf-8');
         if (check.pattern.test(content)) {
           report.issues.push({
             category: 'deprecated-pattern',

@@ -146,6 +146,12 @@ export class ValidatorAgent extends BaseAgent {
   async _artisan(args) {
     // SEC-024 FIX: Minimal env via shell.js buildMinimalEnv — never leak secrets.
     // Additional PHP/Laravel-specific env keys are passed via envKeys.
+    //
+    // SEC-302 INTENTIONAL: DB credentials (DB_HOST, DB_USERNAME, DB_PASSWORD, etc.)
+    // are forwarded deliberately. Artisan commands like route:list, config:clear, and
+    // test require a working database connection. These are the user's own credentials
+    // running the user's own artisan binary in the user's own project. Removing them
+    // would break validation. This is not a leak — it is a functional requirement.
     return execCommand('php', ['artisan', ...args], {
       cwd: this.projectPath,
       timeout: this.artisanTimeout,
