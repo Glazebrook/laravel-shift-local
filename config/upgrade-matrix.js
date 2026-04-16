@@ -30,6 +30,7 @@ export const UPGRADE_MATRIX = {
       'Replace $dates property with $casts array entries',
       'Update PHPUnit to ^9.0',
       'Review any custom filesystem adapters',
+      'DO NOT rename $routeMiddleware to $middlewareAliases — that change belongs to Laravel 10, not 9',
     ],
   },
 
@@ -46,10 +47,12 @@ export const UPGRADE_MATRIX = {
       'assertDeletedInDatabase() removed — use assertDatabaseMissing()',
       'Carbon 2.65+ required',
       'Deprecated Model setRawAttributes() changes',
+      '$routeMiddleware renamed to $middlewareAliases in Http\\Kernel (both supported, but $middlewareAliases is canonical from 10.x)',
     ],
     hints: [
       'PHP 8.1 enum support now available — consider migrating string constants',
       'Check any classes extending framework classes for return type conflicts',
+      'Rename $routeMiddleware to $middlewareAliases in app/Http/Kernel.php',
       'Run: composer require laravel/framework:^10.0 phpunit/phpunit:^10.0',
       'Update laravel/pint, laravel/sail if used',
     ],

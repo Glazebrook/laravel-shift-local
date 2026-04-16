@@ -30,7 +30,7 @@ When this command is invoked:
 
 1. First ask the user: "What version are you upgrading FROM and TO? (e.g. 10 → 11)"
 2. Confirm the project path (default: current workspace)
-3. Verify ANTHROPIC_API_KEY is set: `echo $ANTHROPIC_API_KEY`
+3. Verify AWS credentials are available: `aws sts get-caller-identity` (or check `ANTHROPIC_API_KEY` if using direct API)
 4. Check if there's an existing shift state: `cat .shift/state.json 2>/dev/null`
 5. If state exists, ask: "There's an existing upgrade in progress. Resume or start fresh?"
 6. Run the appropriate command:

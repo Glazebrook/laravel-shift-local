@@ -87,7 +87,7 @@ export class ValidatorAgent extends BaseAgent {
       const hasTests = this.fileTools.fileExists('phpunit.xml') || this.fileTools.fileExists('phpunit.xml.dist');
       if (hasTests) {
         await this.logger.info(this.name, 'Running tests (this may take a while)...');
-        const testResult = await this._artisan(['test', '--stop-on-failure', '--compact']);
+        const testResult = await this._artisan(['test', '--stop-on-failure']);
         results.testsRun = {
           ran: true,
           passed: testResult.ok,
@@ -95,6 +95,7 @@ export class ValidatorAgent extends BaseAgent {
           error: testResult.stderr?.substring(0, 500),
         };
         if (!testResult.ok) {
+          results.passed = false;
           results.warnings.push('Test suite has failures — review SHIFT_REPORT.md');
         } else {
           await this.logger.success(this.name, 'All tests passing');

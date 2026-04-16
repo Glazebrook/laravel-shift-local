@@ -20,7 +20,8 @@ You are running end-to-end validation of **Laravel Shift Local** (`shift`) — a
 - Git installed and available (`git --version`)
 - Node.js 20+ installed and available (`node --version`)
 - The `shift` command is available (or use `node bin/shift.js` as fallback)
-- A valid `ANTHROPIC_API_KEY` is set in the environment
+- AWS credentials configured for Bedrock access (via `AWS_PROFILE` or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`)
+- Bedrock model access enabled for `anthropic.claude-opus-4-6-v1` and `anthropic.claude-sonnet-4-6` in your AWS region
 - Internet access for Composer to resolve dependencies
 
 **CLI reference (from `shift --help`):**
@@ -59,15 +60,33 @@ else
 fi
 echo "Using: $SHIFT_CMD"
 
-# 4. Verify API key
-echo "ANTHROPIC_API_KEY is ${ANTHROPIC_API_KEY:+set}"
-[ -z "$ANTHROPIC_API_KEY" ] && echo "FATAL: ANTHROPIC_API_KEY not set" && exit 1
+# 4. Configure AWS Bedrock provider
+export SHIFT_PROVIDER=bedrock
+export AWS_PROFILE=datalake
+export AWS_DEFAULT_REGION=eu-west-2
 
-# 5. Create test workspace (isolated from real projects)
+# 5. Verify AWS credentials
+aws sts get-caller-identity 2>/dev/null && echo "AWS credentials: valid" || echo "FATAL: AWS credentials not configured"
+
+# 6. Create test workspace (isolated from real projects)
 export TEST_WORKSPACE="$HOME/shift-validation-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$TEST_WORKSPACE"
 cd "$TEST_WORKSPACE"
 echo "Test workspace: $TEST_WORKSPACE"
+
+# 7. Create a reusable .shiftrc template for Bedrock test projects
+#    globalInference defaults to true (required for Opus on Bedrock),
+#    but we set it explicitly here for clarity.
+cat > "$TEST_WORKSPACE/.shiftrc-template" << 'JSON'
+{
+  "provider": "bedrock",
+  "bedrock": {
+    "region": "eu-west-2",
+    "profile": "datalake",
+    "globalInference": true
+  }
+}
+JSON
 ```
 
 ```
@@ -77,7 +96,7 @@ PHP: [version]
 Composer: [version]
 Node: [version]
 shift: [version or path]
-API key: set / NOT SET
+Provider: bedrock (AWS_PROFILE=datalake, region=eu-west-2)
 ═══════════════════════════════════════════════════
 ```
 
@@ -118,6 +137,9 @@ composer create-project laravel/laravel:^10.0 . --prefer-dist --no-interaction
 # Verify it's Laravel 10
 php artisan --version
 # Should output: Laravel Framework 10.x.x
+
+# Copy Bedrock .shiftrc into the test project
+cp "$TEST_WORKSPACE/.shiftrc-template" .shiftrc
 
 # Initialise git (shift requires a git repo)
 git init
@@ -576,6 +598,7 @@ mkdir test-11-to-12 && cd test-11-to-12
 composer create-project laravel/laravel:^11.0 . --prefer-dist --no-interaction
 php artisan --version  # Should be 11.x.x
 
+cp "$TEST_WORKSPACE/.shiftrc-template" .shiftrc
 git init && git add -A && git commit -m "Initial Laravel 11 project"
 ```
 
@@ -740,6 +763,7 @@ mkdir test-9-to-11 && cd test-9-to-11
 composer create-project laravel/laravel:^9.0 . --prefer-dist --no-interaction
 php artisan --version  # Should be 9.x.x
 
+cp "$TEST_WORKSPACE/.shiftrc-template" .shiftrc
 git init && git add -A && git commit -m "Initial Laravel 9 project"
 
 # Seed: old-style Faker property access (deprecated in 9, removed in 10)
@@ -861,6 +885,8 @@ git init && git add -A && git commit -m "Initial Laravel 10"
 # maxTotalTokens must be >= 10000 (validated by the tool) and lives under behaviour
 cat > .shiftrc << 'JSON'
 {
+  "provider": "bedrock",
+  "bedrock": { "region": "eu-west-2", "profile": "datalake", "globalInference": true },
   "shift": { "fromVersion": "10", "toVersion": "11" },
   "behaviour": { "maxTotalTokens": 10000 }
 }
@@ -882,6 +908,8 @@ fi
 # Increase token limit and resume
 cat > .shiftrc << 'JSON'
 {
+  "provider": "bedrock",
+  "bedrock": { "region": "eu-west-2", "profile": "datalake", "globalInference": true },
   "shift": { "fromVersion": "10", "toVersion": "11" },
   "behaviour": { "maxTotalTokens": 500000 }
 }
@@ -929,6 +957,7 @@ composer create-project laravel/laravel:^10.0 . --prefer-dist --no-interaction
 # Remove all custom code — just the skeleton
 rm -rf app/Models/User.php  # Keep only bare minimum
 
+cp "$TEST_WORKSPACE/.shiftrc-template" .shiftrc
 git init && git add -A && git commit -m "Minimal Laravel 10"
 
 # Run upgrade
@@ -981,6 +1010,7 @@ cd "$TEST_WORKSPACE"
 mkdir test-dry-run && cd test-dry-run
 
 composer create-project laravel/laravel:^10.0 . --prefer-dist --no-interaction
+cp "$TEST_WORKSPACE/.shiftrc-template" .shiftrc
 git init && git add -A && git commit -m "Initial Laravel 10"
 
 # Dry run should analyse and plan but not modify code or dependencies

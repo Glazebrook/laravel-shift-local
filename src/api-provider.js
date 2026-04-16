@@ -104,15 +104,17 @@ export function calculateCost(provider, modelString, inputTokens, outputTokens) 
  * @param {object} config - Provider configuration
  * @param {string} [config.provider] - 'anthropic' or 'bedrock' (auto-detected if omitted)
  * @param {object} [config.bedrock] - Bedrock-specific options
- * @param {string} [config.bedrock.region] - AWS region (default: 'us-east-1')
+ * @param {string} [config.bedrock.region] - AWS region (falls back to AWS_DEFAULT_REGION / AWS_REGION env vars, then 'us-east-1')
  * @param {string} [config.bedrock.profile] - AWS profile name from ~/.aws/credentials (sets AWS_PROFILE)
- * @param {boolean} [config.bedrock.globalInference] - Use cross-region inference (default: false)
+ * @param {boolean} [config.bedrock.globalInference] - Use cross-region inference (default: true).
+ *        Opus models require inference profiles on Bedrock, so this defaults to true.
+ *        Set to false only if you need strict single-region data residency (Opus will fail).
  * @returns {{ client: object, mapModel: Function, provider: string, getPricing: Function }}
  */
 export function createApiClient(config = {}) {
   const provider = config.provider || detectProvider();
   const bedrockOpts = config.bedrock || {};
-  const globalInference = bedrockOpts.globalInference || false;
+  const globalInference = bedrockOpts.globalInference !== undefined ? bedrockOpts.globalInference : true;
 
   const mapModel = createModelMapper(provider, globalInference);
 
@@ -130,7 +132,8 @@ export function createApiClient(config = {}) {
       process.env.AWS_PROFILE = bedrockOpts.profile;
     }
     const opts = {};
-    if (bedrockOpts.region) opts.awsRegion = bedrockOpts.region;
+    const region = bedrockOpts.region || process.env.AWS_DEFAULT_REGION || process.env.AWS_REGION;
+    if (region) opts.awsRegion = region;
     client = new AnthropicBedrock(opts);
   } else {
     client = new Anthropic();

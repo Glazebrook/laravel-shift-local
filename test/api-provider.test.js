@@ -210,8 +210,16 @@ describe('createApiClient', () => {
     assert.ok(api.client);
   });
 
-  it('creates bedrock client with explicit provider config', () => {
+  it('creates bedrock client with globalInference enabled by default', () => {
     const api = createApiClient({ provider: 'bedrock', bedrock: { region: 'eu-west-2' } });
+    assert.equal(api.provider, 'bedrock');
+    // globalInference defaults to true — Opus requires inference profiles on Bedrock
+    assert.equal(api.mapModel('claude-opus-4-6'), 'global.anthropic.claude-opus-4-6-v1');
+    assert.ok(api.client);
+  });
+
+  it('creates bedrock client without global prefix when globalInference explicitly false', () => {
+    const api = createApiClient({ provider: 'bedrock', bedrock: { region: 'eu-west-2', globalInference: false } });
     assert.equal(api.provider, 'bedrock');
     assert.equal(api.mapModel('claude-opus-4-6'), 'anthropic.claude-opus-4-6-v1');
     assert.ok(api.client);
@@ -264,5 +272,24 @@ describe('createApiClient', () => {
     delete process.env.AWS_PROFILE;
     createApiClient({ provider: 'bedrock', bedrock: { region: 'eu-west-2', profile: 'datalake' } });
     assert.equal(process.env.AWS_PROFILE, 'datalake');
+  });
+
+  it('falls back to AWS_DEFAULT_REGION when bedrock.region not set', () => {
+    process.env.AWS_DEFAULT_REGION = 'ap-southeast-1';
+    // We can't easily inspect the region passed to AnthropicBedrock,
+    // but we can verify the client is created without error
+    const api = createApiClient({ provider: 'bedrock', bedrock: {} });
+    assert.equal(api.provider, 'bedrock');
+    assert.ok(api.client);
+    delete process.env.AWS_DEFAULT_REGION;
+  });
+
+  it('falls back to AWS_REGION when bedrock.region and AWS_DEFAULT_REGION not set', () => {
+    delete process.env.AWS_DEFAULT_REGION;
+    process.env.AWS_REGION = 'us-west-2';
+    const api = createApiClient({ provider: 'bedrock', bedrock: {} });
+    assert.equal(api.provider, 'bedrock');
+    assert.ok(api.client);
+    delete process.env.AWS_REGION;
   });
 });

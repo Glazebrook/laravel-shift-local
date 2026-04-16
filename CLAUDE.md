@@ -98,6 +98,12 @@ Place a `.shiftrc` JSON file in the project root. CLI flags override .shiftrc va
 
 ```json
 {
+  "provider": "bedrock",
+  "bedrock": {
+    "region": "eu-west-2",
+    "profile": "datalake",
+    "globalInference": true
+  },
   "behaviour": {
     "failFast": false,
     "maxFileRetries": 3,
@@ -127,7 +133,12 @@ Set `maxTotalTokens` in `.shiftrc` to cap cumulative token usage across all agen
 
 ## Environment
 
-Requires `ANTHROPIC_API_KEY` in environment.
+Requires AWS credentials for Bedrock access. Configure via:
+- `AWS_PROFILE` environment variable (or `bedrock.profile` in `.shiftrc`)
+- `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` environment variables
+
+The `.shiftrc` file sets `"provider": "bedrock"` with region and profile defaults.
+Direct Anthropic API (`ANTHROPIC_API_KEY`) is also supported but not the default.
 
 ## Extending
 

@@ -4,7 +4,8 @@
   "provider": "bedrock",
   "bedrock": {
     "region": "eu-west-2",
-    "profile": "datalake"
+    "profile": "datalake",
+    "globalInference": true
   },
 
   "shift": {

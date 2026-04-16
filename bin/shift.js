@@ -483,9 +483,10 @@ async function runUpgrade(opts) {
   if (effectiveProvider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
     throw new ShiftCliError('SHIFT_ERR_API_AUTH', 'ANTHROPIC_API_KEY environment variable is required');
   }
-  if (effectiveProvider === 'bedrock' && !process.env.AWS_ACCESS_KEY_ID && !process.env.AWS_PROFILE) {
+  const bedrockProfile = config.bedrock?.profile;
+  if (effectiveProvider === 'bedrock' && !process.env.AWS_ACCESS_KEY_ID && !process.env.AWS_PROFILE && !bedrockProfile) {
     throw new ShiftCliError('SHIFT_ERR_API_AUTH',
-      'AWS credentials required for Bedrock provider. Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or AWS_PROFILE.');
+      'AWS credentials required for Bedrock provider. Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or AWS_PROFILE, or set bedrock.profile in .shiftrc.');
   }
 
   const fromArg = opts.from || config.shift.fromVersion;
@@ -563,7 +564,7 @@ async function runUpgrade(opts) {
       console.log('🚀 Laravel Shift Local');
       console.log(`  Upgrading: Laravel ${fromVersion} → ${toVersion}`);
       console.log(`  Project: ${projectPath}`);
-      console.log(`  Provider: ${effectiveProvider}${effectiveProvider === 'bedrock' ? ` (${config.bedrock?.region || 'us-east-1'})` : ''}`);
+      console.log(`  Provider: ${effectiveProvider}${effectiveProvider === 'bedrock' ? ` (${config.bedrock?.region || process.env.AWS_DEFAULT_REGION || process.env.AWS_REGION || 'us-east-1'})` : ''}`);
       if (config.dryRun) console.log('  Mode: DRY RUN — no changes will be made');
     }
 
@@ -591,7 +592,7 @@ async function runUpgrade(opts) {
   } else {
     const dryRunLabel = config.dryRun ? `\n  ${chalk.yellow('Mode: DRY RUN — no changes will be made')}` : '';
     const providerLabel = effectiveProvider === 'bedrock'
-      ? `AWS Bedrock (${config.bedrock?.region || 'us-east-1'})`
+      ? `AWS Bedrock (${config.bedrock?.region || process.env.AWS_DEFAULT_REGION || process.env.AWS_REGION || 'us-east-1'})`
       : 'Anthropic API';
     console.log(boxen(
       `${chalk.bold.blue('🚀 Laravel Shift Local')}\n\n` +
@@ -671,9 +672,10 @@ async function resumeUpgrade(opts) {
   if (effectiveProvider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
     throw new ShiftCliError('SHIFT_ERR_API_AUTH', 'ANTHROPIC_API_KEY environment variable is required');
   }
-  if (effectiveProvider === 'bedrock' && !process.env.AWS_ACCESS_KEY_ID && !process.env.AWS_PROFILE) {
+  const bedrockProfile = config.bedrock?.profile;
+  if (effectiveProvider === 'bedrock' && !process.env.AWS_ACCESS_KEY_ID && !process.env.AWS_PROFILE && !bedrockProfile) {
     throw new ShiftCliError('SHIFT_ERR_API_AUTH',
-      'AWS credentials required for Bedrock provider. Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or AWS_PROFILE.');
+      'AWS credentials required for Bedrock provider. Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or AWS_PROFILE, or set bedrock.profile in .shiftrc.');
   }
 
   const logger = new Logger(projectPath, config.verbose);

@@ -2,7 +2,7 @@
 
 > Automated Laravel upgrades powered by a **Claude multi-agent pipeline** — runs entirely in your terminal via VS Code + Claude Code, with no external service required.
 
-Mirrors the functionality of [laravelshift.com](https://laravelshift.com) but runs on your machine, against your local codebase, using the Anthropic API directly.
+Mirrors the functionality of [laravelshift.com](https://laravelshift.com) but runs on your machine, against your local codebase, using Claude via AWS Bedrock (or the direct Anthropic API).
 
 ---
 
@@ -36,7 +36,7 @@ Mirrors the functionality of [laravelshift.com](https://laravelshift.com) but ru
 - **PHP 8.x** (matching your project)
 - **Composer** installed globally
 - **Git** repository (the project being upgraded must be a git repo)
-- **ANTHROPIC_API_KEY** environment variable
+- **AWS credentials** for Bedrock access (via `AWS_PROFILE` or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`)
 
 ---
 
@@ -67,12 +67,20 @@ npm install
 node bin/shift.js upgrade --from=10 --to=11 --path=/var/www/myapp
 ```
 
-### Set your API key
+### Set up AWS credentials
 
 ```bash
-# Add to your shell profile (.bashrc, .zshrc, etc.)
-export ANTHROPIC_API_KEY="sk-ant-..."
+# Option A: Use an AWS profile (recommended)
+# Configure a profile in ~/.aws/credentials, then either:
+export AWS_PROFILE="datalake"
+# Or set it in .shiftrc: { "bedrock": { "profile": "datalake" } }
+
+# Option B: Use access keys directly
+export AWS_ACCESS_KEY_ID="AKIA..."
+export AWS_SECRET_ACCESS_KEY="..."
 ```
+
+> **Note:** The direct Anthropic API is also supported. Set `"provider": "anthropic"` in `.shiftrc` and export `ANTHROPIC_API_KEY` instead.
 
 ---
 
@@ -174,7 +182,7 @@ Your Project
  Analyzer Planner Dependency Transformer Validator Reporter
  (Opus)  (Opus)  (Sonnet)  (Sonnet)    (Sonnet) (Sonnet)
     │
-    └── Uses Anthropic tool use to actually read/write your files
+    └── Uses Claude tool use (via Bedrock) to actually read/write your files
 ```
 
 ### Phase details
@@ -211,6 +219,12 @@ Place a `.shiftrc` file in your Laravel project root to configure behaviour:
 
 ```json
 {
+  "provider": "bedrock",
+  "bedrock": {
+    "region": "eu-west-2",
+    "profile": "datalake",
+    "globalInference": true
+  },
   "behaviour": {
     "failFast": false,
     "maxFileRetries": 3,
@@ -229,14 +243,28 @@ Place a `.shiftrc` file in your Laravel project root to configure behaviour:
 }
 ```
 
+Provider options:
+- `"provider": "bedrock"` — uses AWS Bedrock (default when AWS credentials are present)
+- `"provider": "anthropic"` — uses the direct Anthropic API
+- `"bedrock.region"` — AWS region (falls back to `AWS_DEFAULT_REGION`, then `us-east-1`)
+- `"bedrock.profile"` — AWS profile from `~/.aws/credentials`
+- `"bedrock.globalInference"` — use cross-region inference (default: `true`, required for Opus on Bedrock)
+
 ---
 
 ## Troubleshooting
 
-### "ANTHROPIC_API_KEY not set"
+### "AWS credentials required for Bedrock provider"
 ```bash
+# Set your AWS profile
+export AWS_PROFILE="datalake"
+
+# Or use access keys
+export AWS_ACCESS_KEY_ID="AKIA..."
+export AWS_SECRET_ACCESS_KEY="..."
+
+# If using the direct Anthropic API instead, set provider in .shiftrc to "anthropic" and:
 export ANTHROPIC_API_KEY="sk-ant-..."
-# Or add to your .bashrc/.zshrc
 ```
 
 ### "Project must be a git repository"
@@ -267,11 +295,11 @@ shift status
 
 ## Troubleshooting
 
-### API key expires or is rotated mid-run
+### Credentials expire or are rotated mid-run
 
-If your `ANTHROPIC_API_KEY` is revoked or rotated while an upgrade is running, agent calls will fail with an authentication error. The pipeline will report this clearly and stop. To recover:
+If your AWS credentials (or `ANTHROPIC_API_KEY` for the direct API) expire or are rotated while an upgrade is running, agent calls will fail with an authentication error. The pipeline will report this clearly and stop. To recover:
 
-1. Set the new key: `export ANTHROPIC_API_KEY=sk-ant-...`
+1. Refresh your credentials (e.g. re-authenticate with `aws sso login`, set new access keys, or export a new `ANTHROPIC_API_KEY`)
 2. Resume: `shift resume --path=/your/project`
 
 ### Corrupted state file
